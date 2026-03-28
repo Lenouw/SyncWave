@@ -57,7 +57,7 @@ struct AudioExtractor {
             guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
             let length = CMBlockBufferGetDataLength(blockBuffer)
             var data = Data(count: length)
-            data.withUnsafeMutableBytes { ptr in
+            _ = data.withUnsafeMutableBytes { ptr in
                 CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: ptr.baseAddress!)
             }
             let floatCount = length / MemoryLayout<Float>.size
