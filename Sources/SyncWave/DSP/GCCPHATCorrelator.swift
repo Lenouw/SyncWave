@@ -139,27 +139,38 @@ struct GCCPHATCorrelator {
         vDSP_maxvi(absCorr, 1, &maxVal, &maxIdx, vDSP_Length(fftSize))
         var detectedLag = circularIndexToLag(Int(maxIdx), fftSize: fftSize)
 
-        // Handle periodic signal aliasing: when the detected lag is 0 and there exist
-        // competitive peaks at non-zero lags (ratio > 0.5 of max), prefer the nearest
-        // non-zero lag. This correctly handles the case where the signal period exactly
-        // equals the true offset, creating a tie at lag=0.
+        // Validate the detected lag using normalized cross-correlation.
+        // GCC-PHAT can produce a false peak at lag=0 for periodic signals. When the detected
+        // lag is 0, check if a better (higher NCC) non-zero candidate exists in the top peaks.
         if detectedLag == 0 {
-            let competitiveThreshold = maxVal * 0.5
-            var bestAltLag = 0
-            var bestAltLagAbs = Int.max
+            let zeroNCC = abs(normalizedCrossCorr(ref: ref, tgt: tgt, lag: 0))
+            let halfRefLen = ref.count / 2
+            // Collect the top-50 non-zero peaks by GCC-PHAT score within valid range.
+            var topPeaks: [(lag: Int, score: Float)] = []
             for i in 1..<fftSize {
-                if absCorr[i] >= competitiveThreshold {
-                    let candidateLag = circularIndexToLag(i, fftSize: fftSize)
-                    if abs(candidateLag) < bestAltLagAbs {
-                        bestAltLagAbs = abs(candidateLag)
-                        bestAltLag = candidateLag
+                let candidateLag = circularIndexToLag(i, fftSize: fftSize)
+                if candidateLag != 0 && abs(candidateLag) < halfRefLen {
+                    let score = absCorr[i]
+                    if topPeaks.count < 50 {
+                        topPeaks.append((lag: candidateLag, score: score))
+                        topPeaks.sort { $0.score > $1.score }
+                    } else if score > topPeaks.last!.score {
+                        topPeaks[49] = (lag: candidateLag, score: score)
+                        topPeaks.sort { $0.score > $1.score }
                     }
                 }
             }
-            // Only replace lag=0 if there's a clear competitive non-zero lag within
-            // valid range (half the signal length)
-            let halfRefLen = ref.count / 2
-            if bestAltLagAbs < halfRefLen && bestAltLagAbs > 0 {
+            // Pick the candidate with highest NCC, if it beats lag=0.
+            var bestAltLag = 0
+            var bestNCC = zeroNCC
+            for peak in topPeaks {
+                let ncc = abs(normalizedCrossCorr(ref: ref, tgt: tgt, lag: peak.lag))
+                if ncc > bestNCC {
+                    bestNCC = ncc
+                    bestAltLag = peak.lag
+                }
+            }
+            if bestAltLag != 0 {
                 detectedLag = bestAltLag
             }
         }
