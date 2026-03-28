@@ -6,7 +6,8 @@ struct SyncWaveApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Text("SyncWave")
+            MainWindow()
+                .environmentObject(appState)
                 .frame(minWidth: 900, minHeight: 600)
         }
         .windowStyle(.titleBar)
