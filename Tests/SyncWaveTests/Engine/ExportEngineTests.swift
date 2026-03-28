@@ -27,7 +27,7 @@ final class ExportEngineTests: XCTestCase {
         let xml = try engine.generateFCP7XML(clips: clips, syncResult: syncResult, settings: ExportSettings(), frameRate: 25)
 
         XCTAssertTrue(xml.contains("<?xml version=\"1.0\""))
-        XCTAssertTrue(xml.contains("<xmeml version=\"5\">"))
+        XCTAssertTrue(xml.contains("<xmeml version=\"4\">"))
         XCTAssertTrue(xml.contains("<name>SyncWave Export</name>"))
         XCTAssertTrue(xml.contains("<timebase>25</timebase>"))
         XCTAssertTrue(xml.contains("CamA.MOV"))
