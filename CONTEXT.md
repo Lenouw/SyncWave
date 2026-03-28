@@ -1,87 +1,88 @@
 # Contexte du projet
 
 ## Projet
-**SyncWave** (nom de travail) — Clone open-source de PluralEyes, l'app de synchronisation automatique audio/video multi-camera qui a ete abandonnee par Maxon en 2023. L'objectif est de reproduire les fonctionnalites cles de PluralEyes dans une app macOS native, simple d'utilisation.
+**SyncWave** — Clone open-source de PluralEyes, l'app de synchronisation automatique audio/video multi-camera abandonnee par Maxon en 2023. App macOS native pour synchroniser des rushes multi-cam d'interviews (2-4 cameras + micro externe) et exporter vers Premiere Pro.
 
 ## Stack technique
-- **Langage** : Swift
-- **UI** : SwiftUI (macOS natif)
-- **DSP/Audio** : Accelerate framework (vDSP pour FFT et cross-correlation, hardware-accelere)
-- **Media** : AVFoundation (lecture/extraction audio des fichiers video)
-- **FFmpeg** : via process shell pour les formats non supportes par AVFoundation
-- **Export** : generation de FCP XML, FCPXML, Premiere XML
-- **Plateforme** : macOS uniquement
-- **Min OS** : macOS 14+ (Sonoma)
+- **Langage** : Swift 5.9+
+- **UI** : SwiftUI (macOS 14+ Sonoma)
+- **DSP/Audio** : Accelerate/vDSP (FFT, cross-correlation hardware-acceleree sur Apple Silicon)
+- **Media** : AVFoundation (extraction audio) + FFmpeg CLI en fallback (MXF, BRAW, R3D)
+- **Export** : FCP 7 XML v5 (compatible Premiere Pro, DaVinci Resolve, EDIUS)
+- **Tests** : XCTest (15 tests)
+- **Build** : Swift Package Manager
 
 ## Derniere mise a jour
-2026-03-28 21:15
+2026-03-28 22:30
 
 ## Ce qu'on a fait
-- [2026-03-28] Initialisation du projet
-- [2026-03-28] Recherche approfondie sur PluralEyes : fonctionnalites, UX/workflow, alternatives, libs techniques
-- [2026-03-28] Choix de la stack : SwiftUI natif + Accelerate framework
+- [2026-03-28] Implementation complete de SyncWave v1 en une session :
+  - Recherche approfondie sur PluralEyes (5 agents en parallele)
+  - Design spec + plan d'implementation (13 taches)
+  - Execution via subagent-driven development (13 taches, toutes completees)
+  - 15 commits propres, 15 tests passent, build OK
 
 ## Ou on en est
-Projet vient d'etre initialise. Aucun code encore. La phase de recherche est terminee, on a une vision claire de ce qu'il faut construire.
+**L'app v1 est fonctionnelle.** Tous les composants sont implementes :
+
+### Moteur DSP (complet)
+- `GCCPHATCorrelator` : cross-correlation via vDSP, precision ±20µs a 48kHz
+- `DriftCorrector` : detection de drift par correlation normalisee + regression lineaire
+- `AudioExtractor` : AVFoundation + fallback FFmpeg
+- `AudioBuffer` : wrapper Float32 PCM avec downsampling et windowing
+
+### Engine (complet)
+- `SyncEngine` : orchestre extraction → correlation → drift → resultats
+- `ExportEngine` : genere FCP 7 XML valide pour Premiere Pro
+
+### UI (complet)
+- `MainWindow` : toolbar (Importer, Synchroniser, Exporter)
+- `ImportDropZone` : drag & drop pour fichiers media
+- `TimelineView` + `TimelineTrackView` : timeline multi-piste avec code couleur
+- `SyncStatusPanel` : statut par clip + confiance globale
+- `PreviewView` : lecteur video AVPlayer
+- `ExportSheet` : modal d'export avec options
+
+### Modeles (complet)
+- `MediaClip`, `SyncResult`, `ClipAlignment`, `Project`, `ExportSettings`
 
 ## Architecture et decisions
 
-### Pourquoi SwiftUI natif plutot qu'Electron/Tauri
-- L'app est macOS uniquement, pas besoin de cross-platform
-- Accelerate framework (vDSP) est hardware-accelere sur Apple Silicon — ideal pour le DSP audio
-- AVFoundation gere nativement la plupart des formats video/audio sans dependance externe
-- UX native macOS plus fluide et coherente
+### Algorithme de sync (2 phases)
+1. **GCC-PHAT** sur signal complet : detecte l'offset entre deux clips
+2. **Correction de drift** : correlation normalisee sur fenetres glissantes + regression lineaire
+- L'implementeur a ameliore l'approche du spec : correlation normalisee directe au lieu de GCC-PHAT fenetre pour le drift (plus precis pour petits drifts)
 
-### Algorithme de synchronisation (2 phases, comme PluralEyes)
-1. **Audio fingerprinting** : extraction de spectrogrammes via FFT, comparaison des empreintes pour trouver les correspondances grossieres (precision ~frame)
-2. **Cross-correlation (GCC-PHAT)** : affinage sample-accurate de l'alignement
-3. **Correction de drift** : segmentation des longs enregistrements, recalcul du sync a plusieurs points pour compenser le decalage d'horloge entre appareils
+### Pourquoi vDSP et pas libfftw3/Chromaprint
+- **vDSP** : precision identique a libfftw3, hardware-accelere sur Apple Silicon (AMX), zero dependance
+- **Chromaprint** : concu pour identification musicale (Shazam-like), resolution 512ms — inutile pour sync sub-ms
+- **libfftw3** : aucun avantage sur Apple Silicon, ajouterait une dependance C
 
-### Workflow utilisateur (inspire de PluralEyes)
-1. Drag & drop des fichiers media (video + audio)
-2. "Smart Start" : detection automatique des sources/appareils
-3. Clic sur "Synchroniser"
-4. Review : timeline avec code couleur (vert=synced, rouge=probleme), preview video, mute/solo par piste
-5. Export vers NLE (Premiere Pro XML, FCPXML, DaVinci Resolve XML, fichiers media)
-
-### Formats supportes (cible)
-**Video** : MOV, MP4, MXF, R3D, BRAW, AVCHD, AVI, ProRes
-**Audio** : WAV, AIFF, MP3, AAC, M4A
-**Export** : FCP 7 XML (Premiere/Resolve), FCPXML 1.10+ (FCP X moderne), fichiers media synces
-
-### Ce qui manquait a PluralEyes (opportunites)
-- FCPXML 1.2 obsolete — on supportera 1.10+ des le depart
-- Pas de support AAF (Avid) dans v4 — a evaluer plus tard
-- Pas de correction de drift dans les NLEs natifs — c'est notre avantage cle
-- Pas de feedback visuel de confiance du sync dans les NLEs — on le fera
+### Seuils de confiance
+- >= 0.7 : vert (sync OK)
+- 0.3-0.7 : jaune (douteux)
+- < 0.3 : rouge (echec)
 
 ## Ce qu'il reste a faire
-- [ ] Scaffolding du projet Xcode (SwiftUI app macOS)
-- [ ] Moteur d'extraction audio (AVFoundation + fallback FFmpeg)
-- [ ] Algorithme de fingerprinting audio (FFT via vDSP)
-- [ ] Algorithme de cross-correlation sample-accurate (GCC-PHAT via vDSP)
-- [ ] Detection et correction du drift d'horloge
-- [ ] UI : ecran d'import drag & drop
-- [ ] UI : timeline multi-piste avec code couleur sync
-- [ ] UI : preview video avec mute/solo par piste
-- [ ] UI : ecran d'export (choix NLE, options)
-- [ ] Generateur FCP 7 XML (Premiere/Resolve)
-- [ ] Generateur FCPXML 1.10 (Final Cut Pro X)
-- [ ] Export fichiers media synces
-- [ ] Tests avec des rushes multi-camera reels
+- [x] Scaffolding projet Xcode/SPM
+- [x] Modeles de donnees
+- [x] Moteur GCC-PHAT
+- [x] Correction de drift
+- [x] Extracteur audio (AVFoundation + FFmpeg)
+- [x] SyncEngine
+- [x] ExportEngine FCP 7 XML
+- [x] UI complete (import, timeline, preview, export)
+- [ ] Tester avec des vrais rushes multi-camera
+- [ ] Mute/Solo par piste audio dans le preview
+- [ ] Waveform visuelle dans la timeline (v1 = blocs colores)
+- [ ] Distribution : creer un .dmg ou signer pour le Mac App Store
+- [ ] Export FCPXML 1.10 (Final Cut Pro X) — v2
+- [ ] Export AAF (Avid) — v2
 
-## Recherche technique (reference)
-
-### Libs/outils de reference identifies
-- **Accelerate/vDSP** (Apple) : FFT, cross-correlation hardware-acceleree
-- **AVFoundation** (Apple) : extraction audio, lecture media
-- **FFmpeg** : fallback pour formats exotiques (R3D, BRAW, MXF)
-- **Chromaprint** (C/C++) : fingerprinting audio, bindings Swift possibles
-- **SyncSink** (Java, Joren Six) : reference open-source de sync multi-camera
-- **audfprint** (Python, Dan Ellis) : fingerprinting avec detection de drift
-
-### Alternatives existantes (concurrence)
-- Premiere Pro "Merge Clips" : basique, pas de batch, pas de drift correction
-- FCP X multicam auto-sync : correct mais limites sur beaucoup de clips
-- DaVinci Resolve auto-sync : idem
-- Aucun clone open-source complet de PluralEyes n'existe actuellement
+## Notes pour la prochaine session
+- L'app compile et tourne via `swift run` (ou `swift build` + execution du binaire)
+- 15 tests passent via `swift test`
+- Pour tester avec de vrais fichiers : lancer l'app, drag & drop des clips, clic Synchroniser, puis Exporter XML
+- Le XML genere s'importe dans Premiere Pro via File > Import
+- Le moteur DSP est le coeur : `Sources/SyncWave/DSP/GCCPHATCorrelator.swift` (~200 lignes)
+- Fichiers cles modifies : tout dans `Sources/SyncWave/` (App, Models, DSP, Engine, Views)
