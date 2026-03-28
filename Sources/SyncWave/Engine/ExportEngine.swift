@@ -139,15 +139,23 @@ struct ExportEngine {
             )
         }
 
-        entries.append(makeEntry(referenceClip, startFrame: 0, index: 1))
+        // Collect raw offsets first
+        var rawOffsets: [(clip: MediaClip, offsetFrames: Int, index: Int)] = []
+        rawOffsets.append((clip: referenceClip, offsetFrames: 0, index: 1))
 
         var idx = 2
         for clip in clips where clip.id != referenceClip.id {
             guard let alignment = alignmentMap[clip.id] else { continue }
             if !settings.includeUnsyncedClips && alignment.confidence < 0.3 { continue }
             let offsetFrames = Int(alignment.offset * Double(frameRate))
-            entries.append(makeEntry(clip, startFrame: offsetFrames, index: idx))
+            rawOffsets.append((clip: clip, offsetFrames: offsetFrames, index: idx))
             idx += 1
+        }
+
+        // Normalize: shift all clips so the earliest starts at frame 0
+        let minOffset = rawOffsets.map(\.offsetFrames).min() ?? 0
+        for item in rawOffsets {
+            entries.append(makeEntry(item.clip, startFrame: item.offsetFrames - minOffset, index: item.index))
         }
 
         return entries
