@@ -20,6 +20,7 @@ struct MediaClip: Identifiable, Equatable {
     var offset: TimeInterval?
     var driftPPM: Double?
     var confidence: Double?
+    var processingProgress: Double = 0  // 0 = pas commencé (grisé), 1 = terminé (couleur pleine)
 
     var canSync: Bool { hasAudioTrack }
 

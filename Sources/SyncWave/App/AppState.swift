@@ -127,6 +127,11 @@ final class AppState: ObservableObject {
         syncProgress = 0
         statusMessage = "Synchronisation en cours..."
 
+        // Reset all clips to 0 progress, mark reference as done
+        for i in 0..<project.clips.count {
+            project.clips[i].processingProgress = project.clips[i].id == refClip.id ? 1.0 : 0.0
+        }
+
         let targetURLs = project.clips
             .filter { $0.id != refClip.id && $0.canSync }
             .map { (label: $0.filename, url: $0.url) }
@@ -137,6 +142,8 @@ final class AppState: ObservableObject {
                 progress: { [weak self] p, msg in Task { @MainActor in
                     self?.syncProgress = p
                     self?.statusMessage = msg
+                    // Update per-clip progress based on message
+                    self?.updateClipProgress(message: msg, globalProgress: p, targetCount: targetURLs.count)
                 } }
             )
 
@@ -185,6 +192,26 @@ final class AppState: ObservableObject {
         } catch {
             statusMessage = "✗ Export échoué: \(error.localizedDescription)"
             return nil
+        }
+    }
+
+    private func updateClipProgress(message: String, globalProgress: Double, targetCount: Int) {
+        // Match clip by filename in the message
+        for i in 0..<project.clips.count {
+            let filename = project.clips[i].filename
+            if message.contains(filename) {
+                if message.contains("✓") || message.contains("synchronisé") {
+                    project.clips[i].processingProgress = 1.0
+                } else if message.contains("Extraction") {
+                    project.clips[i].processingProgress = 0.2
+                } else if message.contains("Corrélation") || message.contains("enveloppe") {
+                    project.clips[i].processingProgress = 0.5
+                } else if message.contains("Affinage") {
+                    project.clips[i].processingProgress = 0.7
+                } else if message.contains("Drift") {
+                    project.clips[i].processingProgress = 0.9
+                }
+            }
         }
     }
 
