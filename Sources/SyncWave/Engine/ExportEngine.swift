@@ -24,7 +24,8 @@ struct ExportEngine {
     ///   SyncWave A1 → Premiere A(N+1) (audio only, stereo)
     ///   SyncWave A2 → Premiere A(N+2) (audio only, stereo)
     func generateTrackBasedXML(tracks: [Track], syncedClips: [MediaClip], settings: ExportSettings, frameRate: Int = 30) throws -> String {
-        let ntsc = (frameRate == 30 || frameRate == 60 || frameRate == 24) ? "TRUE" : "FALSE"
+        // NTSC: 25fps and 50fps are non-NTSC. All others (23.976→24, 29.97→30, 59.94→60) are NTSC.
+        let ntsc = (frameRate == 25 || frameRate == 50) ? "FALSE" : "TRUE"
 
         // Build offset map from synced clips
         var offsetMap: [UUID: TimeInterval] = [:]
@@ -61,7 +62,6 @@ struct ExportEngine {
         var premiereAudioTrackIndex = 0  // A1, A2... (pairs for stereo)
 
         // Track file definitions (first occurrence gets full definition, rest get reference)
-        var definedFileIDs: Set<String> = []
 
         for vTrack in videoTracks {
             premiereVideoTrackIndex += 1
@@ -83,8 +83,6 @@ struct ExportEngine {
                 let videoItemID = nextClipItemID()
                 let audioCh1ItemID = nextClipItemID()
                 let audioCh2ItemID = nextClipItemID()
-                let isFirstDef = !definedFileIDs.contains(fileID)
-                definedFileIDs.insert(fileID)
                 fileCounter += 1
                 masterClipCounter += 1
 

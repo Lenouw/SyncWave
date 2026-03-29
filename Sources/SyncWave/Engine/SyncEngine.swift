@@ -119,12 +119,6 @@ final class SyncEngine {
         try manifestData.write(to: manifestPath)
         Logger.shared.info("Manifest written to: \(manifestPath.path)")
 
-        // Debug: save manifest to Desktop for inspection
-        let debugManifestPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop/syncwave_debug_manifest.json")
-        try? manifestData.write(to: debugManifestPath)
-        print("[DEBUG] Manifest saved to Desktop/syncwave_debug_manifest.json")
-
         progress?(0.45, "Analyse des correspondances entre pistes...")
 
         let result = try runPythonMultiSync(manifestPath: manifestPath)
@@ -185,7 +179,7 @@ final class SyncEngine {
     /// Run the Python multi-clip correlator.
     private func runPythonMultiSync(manifestPath: URL) throws -> [(id: String, offset: TimeInterval, confidence: Double)] {
         let scriptName = "sync_multi.py"
-        let scriptPath = findScript(scriptName)
+        let scriptPath = try findScript(scriptName)
         Logger.shared.info("Python script: \(scriptPath)")
 
         let pythonPath = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
@@ -206,10 +200,10 @@ final class SyncEngine {
         process.standardError = stderrPipe
 
         try process.run()
-        process.waitUntilExit()
-
+        // Read pipes BEFORE waitUntilExit to avoid deadlock if output exceeds pipe buffer (64KB)
         let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
 
         if let stdoutStr = String(data: data, encoding: .utf8), !stdoutStr.isEmpty {
             Logger.shared.info("Python stdout: \(stdoutStr.trimmingCharacters(in: .whitespacesAndNewlines))")
@@ -234,7 +228,7 @@ final class SyncEngine {
     }
 
     /// Find a Python script (in bundle, project, or embedded).
-    private func findScript(_ name: String) -> String {
+    private func findScript(_ name: String) throws -> String {
         let execDir = Bundle.main.executableURL?.deletingLastPathComponent().path ?? ""
         let candidates = [
             Bundle.main.path(forResource: name.replacingOccurrences(of: ".py", with: ""), ofType: "py"),
@@ -242,7 +236,10 @@ final class SyncEngine {
             FileManager.default.currentDirectoryPath + "/Scripts/\(name)"
         ].compactMap { $0 }
 
-        return candidates.first(where: { FileManager.default.fileExists(atPath: $0) })
-            ?? FileManager.default.temporaryDirectory.appendingPathComponent(name).path
+        guard let path = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
+            Logger.shared.error("Script Python \(name) introuvable dans : \(candidates)")
+            throw NSError(domain: "SyncEngine", code: 6, userInfo: [NSLocalizedDescriptionKey: "Script \(name) introuvable. Réinstallez SyncWave."])
+        }
+        return path
     }
 }

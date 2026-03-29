@@ -21,6 +21,7 @@ struct NativePlayerView: NSViewRepresentable {
 struct PreviewView: View {
     @EnvironmentObject var appState: AppState
     @State private var player: AVPlayer?
+    @State private var currentVideoURL: URL?
 
     var body: some View {
         ZStack {
@@ -35,7 +36,9 @@ struct PreviewView: View {
             }
         }
         .onChange(of: appState.project.clips) { _, clips in
-            if let first = clips.first(where: { $0.isVideo }) {
+            // Only recreate player when the first video URL actually changes
+            if let first = clips.first(where: { $0.isVideo }), first.url != currentVideoURL {
+                currentVideoURL = first.url
                 player = AVPlayer(url: first.url)
             }
         }

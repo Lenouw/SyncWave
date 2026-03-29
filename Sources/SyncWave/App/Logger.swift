@@ -13,6 +13,11 @@ final class Logger {
     private let queue = DispatchQueue(label: "com.syncwave.logger", qos: .utility)
     private let logFileURL: URL
     private let maxFileSize: Int = 5 * 1024 * 1024 // 5 MB
+    private let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
 
     private init() {
         let logsDir = FileManager.default.homeDirectoryForCurrentUser
@@ -52,8 +57,6 @@ final class Logger {
     }
 
     private func timestamp() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return f.string(from: Date())
+        dateFormatter.string(from: Date())
     }
 }

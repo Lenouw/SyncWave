@@ -93,31 +93,36 @@ final class AutoUpdater: ObservableObject {
         downloadProgress = 0
 
         do {
-            let (tempURL, _) = try await URLSession.shared.data(from: url)
+            // Download zip
+            let (downloadedData, _) = try await URLSession.shared.data(from: url)
             let zipPath = FileManager.default.temporaryDirectory.appendingPathComponent("SyncWave-update.zip")
-            try tempURL.write(to: zipPath)
-
+            try downloadedData.write(to: zipPath)
             downloadProgress = 0.5
 
+            // Extract in background to avoid blocking MainActor
             let extractDir = FileManager.default.temporaryDirectory.appendingPathComponent("SyncWave-update")
             try? FileManager.default.removeItem(at: extractDir)
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-            process.arguments = ["-xk", zipPath.path, extractDir.path]
-            try process.run()
-            process.waitUntilExit()
+
+            try await Task.detached {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                process.arguments = ["-xk", zipPath.path, extractDir.path]
+                try process.run()
+                process.waitUntilExit()
+            }.value
 
             downloadProgress = 0.8
 
+            // Replace app using actual bundle location (not hardcoded /Applications)
             let newApp = extractDir.appendingPathComponent("SyncWave.app")
-            let installPath = URL(fileURLWithPath: "/Applications/SyncWave.app")
+            let installPath = Bundle.main.bundleURL
 
             if FileManager.default.fileExists(atPath: newApp.path) {
                 try? FileManager.default.removeItem(at: installPath)
                 try FileManager.default.copyItem(at: newApp, to: installPath)
-
                 downloadProgress = 1.0
 
+                // Relaunch
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
                 task.arguments = ["-n", installPath.path]

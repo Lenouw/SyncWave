@@ -121,9 +121,9 @@ final class AppState: ObservableObject {
                 } }
             )
 
-            // Apply results to clips
+            // Apply results to clips — match by UUID first, fallback to filename
             for alignment in result.alignments {
-                if let idx = project.clips.firstIndex(where: { $0.filename == alignment.label }) {
+                if let idx = project.clips.firstIndex(where: { $0.id.uuidString == alignment.label || $0.filename == alignment.label }) {
                     project.clips[idx].applySyncResult(
                         offset: alignment.offset, driftPPM: alignment.driftPPM, confidence: alignment.confidence
                     )

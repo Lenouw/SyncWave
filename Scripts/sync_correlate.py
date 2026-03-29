@@ -13,7 +13,12 @@ from scipy.signal import butter, filtfilt
 
 def preprocess(a, sr=48000):
     a = a - np.mean(a)
-    b, c = butter(4, [200/(sr/2), 4000/(sr/2)], btype='band')
+    nyq = sr / 2
+    low = min(200 / nyq, 0.99)
+    high = min(4000 / nyq, 0.99)
+    if low >= high:
+        return a
+    b, c = butter(4, [low, high], btype='band')
     a = filtfilt(b, c, a)
     rms = np.sqrt(np.mean(a**2))
     return a / rms if rms > 1e-10 else a
