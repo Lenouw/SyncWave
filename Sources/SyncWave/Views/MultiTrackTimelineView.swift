@@ -51,7 +51,14 @@ struct MultiTrackTimelineView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 1) {
-                        ForEach(appState.project.tracks) { track in
+                        // Vidéo en haut, audio en bas (comme un NLE)
+                        ForEach(videoTracks) { track in
+                            TrackRowView(track: track)
+                        }
+                        if !videoTracks.isEmpty && !audioTracks.isEmpty {
+                            Divider().padding(.vertical, 2)
+                        }
+                        ForEach(audioTracks) { track in
                             TrackRowView(track: track)
                         }
                     }
@@ -59,6 +66,14 @@ struct MultiTrackTimelineView: View {
                 }
             }
         }
+    }
+
+    private var videoTracks: [Track] {
+        appState.project.tracks.filter { $0.type == .video }
+    }
+
+    private var audioTracks: [Track] {
+        appState.project.tracks.filter { $0.type == .audio }
     }
 
     private var totalClipCount: Int {

@@ -37,10 +37,33 @@ final class AppState: ObservableObject {
         let prefix = type == .video ? "V" : "A"
         let name = "\(prefix)\(existingCount + 1)"
         project.tracks.append(Track(name: name, type: type))
+        // Renumber tracks to keep names consistent after deletions
+        renumberTracks()
+    }
+
+    private func renumberTracks() {
+        var videoNum = 1
+        var audioNum = 1
+        for i in 0..<project.tracks.count {
+            if project.tracks[i].type == .video {
+                project.tracks[i] = Track(
+                    id: project.tracks[i].id, name: "V\(videoNum)",
+                    type: .video, clips: project.tracks[i].clips
+                )
+                videoNum += 1
+            } else {
+                project.tracks[i] = Track(
+                    id: project.tracks[i].id, name: "A\(audioNum)",
+                    type: .audio, clips: project.tracks[i].clips
+                )
+                audioNum += 1
+            }
+        }
     }
 
     func removeTrack(id: UUID) {
         project.tracks.removeAll { $0.id == id }
+        renumberTracks()
     }
 
     func importToTrack(trackID: UUID, urls: [URL]) async {
