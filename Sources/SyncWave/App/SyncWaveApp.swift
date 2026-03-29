@@ -33,6 +33,9 @@ struct SyncWaveApp: App {
         NSApplication.shared.activate(ignoringOtherApps: true)
         UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
         NSWindow.allowsAutomaticWindowTabbing = false
+
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        Logger.shared.info("SyncWave \(version) launched")
     }
 
     var body: some Scene {
@@ -66,6 +69,12 @@ struct SyncWaveApp: App {
                 Button("Vérifier les mises à jour...") {
                     showUpdateWindow = true
                     Task { await updater.checkForUpdatesManually() }
+                }
+
+                Button("Ouvrir les logs...") {
+                    let logURL = FileManager.default.homeDirectoryForCurrentUser
+                        .appendingPathComponent("Library/Logs/SyncWave/SyncWave.log")
+                    NSWorkspace.shared.open(logURL)
                 }
 
                 Divider()

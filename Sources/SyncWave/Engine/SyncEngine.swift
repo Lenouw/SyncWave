@@ -63,13 +63,18 @@ final class SyncEngine {
             let rawPath = FileManager.default.temporaryDirectory
                 .appendingPathComponent("syncwave_\(clip.id.uuidString).raw")
 
+            let extractStart = CFAbsoluteTimeGetCurrent()
+            Logger.shared.info("Extraction start: \(clip.filename)")
             do {
                 try await extractToRawFile(url: clip.url, output: rawPath)
             } catch {
                 // Skip clips that can't be extracted (corrupted WAV, unsupported format)
+                Logger.shared.warn("Extraction failed: \(clip.filename) — \(error.localizedDescription)")
                 progress?(Double(i + 1) / totalClips * 0.4, "⚠ \(clip.filename) : extraction échouée, ignoré")
                 continue
             }
+            let extractDuration = CFAbsoluteTimeGetCurrent() - extractStart
+            Logger.shared.info(String(format: "Extraction end: \(clip.filename) (%.2fs)", extractDuration))
 
             let trackName = tracks.first(where: { $0.clips.contains(where: { $0.id == clip.id }) })?.name ?? "?"
             clipPaths.append((
@@ -112,6 +117,7 @@ final class SyncEngine {
             .appendingPathComponent("syncwave_manifest.json")
         let manifestData = try JSONSerialization.data(withJSONObject: manifest, options: .prettyPrinted)
         try manifestData.write(to: manifestPath)
+        Logger.shared.info("Manifest written to: \(manifestPath.path)")
 
         // Debug: save manifest to Desktop for inspection
         let debugManifestPath = FileManager.default.homeDirectoryForCurrentUser
@@ -129,6 +135,7 @@ final class SyncEngine {
         var alignments: [SyncAlignment] = []
         for position in result {
             let filename = clipPaths.first(where: { $0.id == position.id })?.filename ?? position.id
+            Logger.shared.info(String(format: "Alignment: \(filename) offset=%.4fs confidence=%.3f", position.offset, position.confidence))
             alignments.append(SyncAlignment(
                 label: filename,
                 offset: position.offset,
@@ -144,6 +151,7 @@ final class SyncEngine {
         try? FileManager.default.removeItem(at: manifestPath)
 
         let processingTime = CFAbsoluteTimeGetCurrent() - startTime
+        Logger.shared.info(String(format: "SyncEngine.syncTracks completed in %.2fs (%d alignments)", processingTime, alignments.count))
         progress?(1.0, String(format: "Synchronisation terminée en %.1fs", processingTime))
 
         return SyncOutput(alignments: alignments, processingTime: processingTime)
@@ -178,27 +186,41 @@ final class SyncEngine {
     private func runPythonMultiSync(manifestPath: URL) throws -> [(id: String, offset: TimeInterval, confidence: Double)] {
         let scriptName = "sync_multi.py"
         let scriptPath = findScript(scriptName)
+        Logger.shared.info("Python script: \(scriptPath)")
 
         let pythonPath = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
             .first { FileManager.default.fileExists(atPath: $0) }
         guard let python = pythonPath else {
+            Logger.shared.error("Python3 not found in expected paths")
             throw NSError(domain: "SyncEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: "Python3 non trouvé"])
         }
+        Logger.shared.info("Python interpreter: \(python)")
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: python)
         process.arguments = [scriptPath, manifestPath.path]
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle(forWritingAtPath: "/dev/stderr") ?? FileHandle.nullDevice
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
 
         try process.run()
         process.waitUntilExit()
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+
+        if let stdoutStr = String(data: data, encoding: .utf8), !stdoutStr.isEmpty {
+            Logger.shared.info("Python stdout: \(stdoutStr.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        if let stderrStr = String(data: stderrData, encoding: .utf8), !stderrStr.isEmpty {
+            Logger.shared.warn("Python stderr: \(stderrStr.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let positions = json["positions"] as? [[String: Any]] else {
+            Logger.shared.error("Invalid Python result (exit code: \(process.terminationStatus))")
             throw NSError(domain: "SyncEngine", code: 4, userInfo: [NSLocalizedDescriptionKey: "Résultat Python invalide"])
         }
 

@@ -60,6 +60,7 @@ final class AppState: ObservableObject {
 
     func importToTrack(trackID: UUID, urls: [URL]) async {
         guard let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }) else { return }
+        let trackName = project.tracks[trackIndex].name
 
         for url in urls {
             let ext = url.pathExtension.lowercased()
@@ -71,6 +72,8 @@ final class AppState: ObservableObject {
             let duration = await getMediaDuration(url: url)
             let hasAudio = await hasAudioTrack(url: url)
             let fps = isVideo ? await getFrameRate(url: url) : 30.0
+
+            Logger.shared.info(String(format: "Import: \(url.lastPathComponent) → track \(trackName) (duration=%.2fs, video=\(isVideo), hasAudio=\(hasAudio))", duration))
 
             let clip = MediaClip(
                 url: url, filename: url.lastPathComponent,
@@ -97,6 +100,7 @@ final class AppState: ObservableObject {
             return
         }
 
+        Logger.shared.info("Sync start (\(allClips.count) clips)")
         isSyncing = true
         syncProgress = 0
         statusMessage = "Synchronisation en cours..."
@@ -138,8 +142,10 @@ final class AppState: ObservableObject {
                 },
                 processingTime: result.processingTime
             )
+            Logger.shared.info(String(format: "Sync end: success (%.1fs, %d alignments)", result.processingTime, result.alignments.count))
             statusMessage = String(format: "✓ Synchronisation terminée en %.1fs", result.processingTime)
         } catch {
+            Logger.shared.error("Sync error: \(error.localizedDescription)")
             statusMessage = "✗ Erreur: \(error.localizedDescription)"
         }
         isSyncing = false
@@ -147,6 +153,7 @@ final class AppState: ObservableObject {
 
     func exportXML(to destination: URL? = nil) async -> URL? {
         guard project.syncResult != nil else { return nil }
+        Logger.shared.info("Export start")
         do {
             // Use the first video clip's frame rate, or default 30
             let videoClip = project.clips.first(where: { $0.isVideo })
@@ -170,14 +177,17 @@ final class AppState: ObservableObject {
             )
             if let destination {
                 try xml.write(to: destination, atomically: true, encoding: .utf8)
+                Logger.shared.info("Export end: \(destination.path)")
                 statusMessage = "✓ Export: \(destination.lastPathComponent)"
                 return destination
             } else {
                 let url = try exportEngine.exportToFile(xml: xml, directory: project.exportSettings.outputDirectory)
+                Logger.shared.info("Export end: \(url.path)")
                 statusMessage = "✓ Export: \(url.lastPathComponent)"
                 return url
             }
         } catch {
+            Logger.shared.error("Export error: \(error.localizedDescription)")
             statusMessage = "✗ Export échoué: \(error.localizedDescription)"
             return nil
         }
