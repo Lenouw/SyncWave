@@ -6,15 +6,47 @@ struct MainWindow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            toolbar
-            if appState.hasClips { mainContent } else { ImportDropZone() }
-            statusBar
+            if appState.project.mode == .none {
+                WelcomeView()
+            } else {
+                toolbar
+
+                if appState.project.mode == .simple {
+                    if appState.hasClips {
+                        mainContent
+                    } else {
+                        ImportDropZone()
+                    }
+                } else {
+                    // Multi-clip mode
+                    HStack(spacing: 0) {
+                        PreviewView()
+                            .frame(height: 220)
+                        SyncStatusPanel()
+                            .frame(width: 220, height: 220)
+                    }
+                    .frame(height: 220)
+
+                    Divider()
+
+                    MultiTrackTimelineView()
+                }
+
+                statusBar
+            }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .sheet(isPresented: $showExportSheet) { ExportSheet() }
     }
 
     private var toolbar: some View {
         HStack(spacing: 10) {
+            Button {
+                appState.resetProject()
+            } label: {
+                Label("Nouveau projet", systemImage: "plus.square")
+            }
+            Divider().frame(height: 20)
             Button { openFileDialog() } label: { Label("Importer", systemImage: "plus") }
             Divider().frame(height: 20)
             Button { Task { await appState.sync() } } label: { Label("Synchroniser", systemImage: "play.fill") }

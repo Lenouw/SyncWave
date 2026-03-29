@@ -11,8 +11,66 @@ final class AppState: ObservableObject {
     private let syncEngine = SyncEngine()
     private let exportEngine = ExportEngine()
 
-    var hasClips: Bool { !project.clips.isEmpty }
+    var hasClips: Bool {
+        if project.mode == .multiClip {
+            return project.tracks.contains { !$0.clips.isEmpty }
+        }
+        return !project.clips.isEmpty
+    }
     var hasSyncResult: Bool { project.syncResult != nil }
+
+    func setMode(_ mode: ProjectMode) {
+        project.mode = mode
+        if mode == .multiClip {
+            project.tracks = [
+                Track(name: "V1", type: .video),
+                Track(name: "V2", type: .video),
+                Track(name: "A1", type: .audio),
+                Track(name: "A2", type: .audio),
+                Track(name: "A3", type: .audio),
+            ]
+        }
+    }
+
+    func addTrack(type: Track.TrackType) {
+        let existingCount = project.tracks.filter { $0.type == type }.count
+        let prefix = type == .video ? "V" : "A"
+        let name = "\(prefix)\(existingCount + 1)"
+        project.tracks.append(Track(name: name, type: type))
+    }
+
+    func removeTrack(id: UUID) {
+        project.tracks.removeAll { $0.id == id }
+    }
+
+    func importToTrack(trackID: UUID, urls: [URL]) async {
+        guard let trackIndex = project.tracks.firstIndex(where: { $0.id == trackID }) else { return }
+
+        for url in urls {
+            let ext = url.pathExtension.lowercased()
+            let videoExts = ["mov", "mp4", "m4v", "mxf", "avi", "mts", "m2ts"]
+            let audioExts = ["wav", "aiff", "aif", "mp3", "aac", "m4a"]
+            guard videoExts.contains(ext) || audioExts.contains(ext) else { continue }
+
+            let isVideo = videoExts.contains(ext)
+            let duration = await getMediaDuration(url: url)
+            let hasAudio = await hasAudioTrack(url: url)
+            let fps = isVideo ? await getFrameRate(url: url) : 30.0
+
+            let clip = MediaClip(
+                url: url, filename: url.lastPathComponent,
+                duration: duration, hasAudioTrack: hasAudio,
+                audioSampleRate: 48000, isVideo: isVideo,
+                frameRate: fps
+            )
+            project.tracks[trackIndex].clips.append(clip)
+        }
+    }
+
+    func resetProject() {
+        project = Project()
+        statusMessage = nil
+    }
 
     func importFiles(urls: [URL]) async {
         for url in urls {
