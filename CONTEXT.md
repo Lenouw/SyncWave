@@ -1,117 +1,111 @@
 # Contexte du projet
 
 ## Projet
-**SyncWave** — App macOS native de synchronisation multi-camera multi-clips. Remplace PluralEyes pour les tournages avec coupures/reprises (plusieurs fichiers par camera + enregistreur externe). L'app detecte quels clips se chevauchent, les synchronise par session, et exporte vers Premiere Pro.
+**SyncWave** — App macOS native de synchronisation multi-camera multi-clips pour les tournages podcast. Remplace PluralEyes pour le cas des tournages avec coupures/reprises et micros individuels par invité.
 
 ## Stack technique
 - **Swift 5.9+ / SwiftUI** : UI, app shell, export XML
 - **Python 3 / scipy** : moteur de correlation audio (subprocess via sync_multi.py)
-- **FFmpeg CLI** : extraction audio en raw PCM (subprocess)
+- **Sparkle 2.9** : auto-updater avec signature EdDSA
+- **FFmpeg CLI** : extraction audio en raw PCM
 - **Export** : FCP 7 XML v4 (Premiere Pro compatible)
-- **Distribution** : .app bundle, GitHub Releases, auto-updater integre
+- **Distribution** : .app bundle, GitHub Releases avec Sparkle appcast
 
 ## Derniere mise a jour
-2026-03-29 16:30
+2026-03-29 21:30
 
 ## Ce qu'on a fait
 
-- [2026-03-29] Session complete de developpement :
-  - Construction de l'app de zero (Swift + Python)
-  - Moteur de sync : envelope cross-correlation via Python/scipy (valide : 81% confiance, -159s offset sur 37min)
-  - Export XML FCP 7 v4 : reecrit pour mapper les pistes SyncWave → Premiere (V1→V1+A1, V2→V2+A2, A1→A3...)
-  - Mode multi-clips : pistes V1/V2/A1/A2, drag & drop, sync par session
-  - Sync par session : 1er clip de chaque piste = session 1, 2eme = session 2, gap de 2min entre sessions
-  - Timeline visuelle NLE : clips positionnes par offset, feedback grise→colore, regle temporelle
-  - UI : auto-updater, icone, preferences, progress detaille
-  - GitHub : repo Lenouw/SyncWave, releases v1.0.0 et v1.0.1
-  - ~50 commits, 15 tests unitaires
+- [2026-03-29] Session marathon de developpement :
+  - App construite de zero : Swift + Python, ~60 commits
+  - Moteur de sync : envelope cross-correlation via Python/scipy
+  - Export XML FCP 7 v4 avec mapping pistes (V1→V1+A1, V2→V2+A2, audio→A3+)
+  - Mode multi-clips avec groupement par session
+  - All-pairs correlation pour gerer les micros individuels
+  - Sparkle integre pour les mises a jour automatiques
+  - Code review complet : 13 corrections (pipe deadlock, NTSC, UUID matching...)
+  - Systeme de logs pour diagnostic
+  - GitHub releases v1.0.0 a v1.2.0
 
 ## Ou on en est
 
 ### Ce qui FONCTIONNE
-- **Structure des pistes dans l'export XML** : les clips d'une meme piste SyncWave sont sur la meme piste Premiere. V1→V1+A1, V2→V2+A2, audio standalone→A3, A4...
-- **Groupement par session** : 1er clip = session 1, 2eme = session 2, chainés avec gap
-- **Pas de crash** : export XML stable, extraction audio non-bloquante
+- **Sync simple** (1 fichier par camera + 1 enregistreur commun) : 81-89% confiance, offsets corrects
+- **Export XML** : format correct, pistes bien mappees dans Premiere
+- **Sparkle** : auto-updater integre avec EdDSA
+- **UI** : timeline NLE, drag & drop par piste, progress visuel
+- **Logs** : ~/Library/Logs/SyncWave/SyncWave.log
 - **App standalone** : /Applications/SyncWave.app
-- **Auto-updater** : verifie GitHub Releases
 
 ### Ce qui NE FONCTIONNE PAS — PROBLEME CRITIQUE
-- **La synchronisation produit des offsets incorrects dans le mode multi-clips**. Les clips d'une meme session ne sont PAS alignes verticalement dans Premiere. Ils sont decales de plusieurs minutes les uns par rapport aux autres. L'utilisateur a montre ce que le resultat DEVRAIT etre (screenshot de reference : tous les clips d'une session commencent au meme moment).
-- **L'UI ne montre pas les pistes audio associees aux videos** — une piste video V1 devrait montrer son audio A1 en dessous, comme dans Premiere
+- **Sync avec micros individuels** : quand chaque micro capte une personne differente (podcast multi-invites), la correlation envelope entre micros est aleatoire (5-7% confiance). L'algo produit des offsets faux.
+- Le cas qui fonctionne : toutes les sources captent le MEME son (cameras + enregistreur commun)
+- Le cas qui echoue : chaque micro capte une personne DIFFERENTE (micro JS vs micro Laura vs micro Gaelle)
 
-### Resultat attendu (screenshot de reference)
-```
-V2  │ ████ Cam2-2752 ████            │ gap │ ████ Cam2-2753 ████████████████ │
-V1  │ ████ Cam3-1728 ████            │ gap │ ████ Cam3-1729 ████████████████ │
-────┼─────────────────────────────────┼─────┼─────────────────────────────────┤
-A1  │ ████ cam3 audio L ████         │ gap │ ████ cam3 audio L ████████████ │
-A2  │ ████ cam3 audio R ████         │ gap │ ████ cam3 audio R ████████████ │
-A3  │ ████ cam2 audio L ████         │ gap │ ████ cam2 audio L ████████████ │
-A4  │ ████ cam2 audio R ████         │ gap │ ████ cam2 audio R ████████████ │
-A5  │ ████ Track1-Mic L ████████████ │ gap │ ████ Track1-Mic L ████████████ │
-A6  │ ████ Track1-Mic R ████████████ │ gap │ ████ Track1-Mic R ████████████ │
-A7  │ ████ Stereo Mix L █████████    │ gap │ ████ Stereo Mix L ████████████ │
-A8  │ ████ Stereo Mix R █████████    │ gap │ ████ Stereo Mix R ████████████ │
-```
-**TOUS les clips d'une meme session doivent commencer au meme moment** (a quelques secondes pres).
+### Cause racine du probleme
+L'envelope cross-correlation compare les MOTIFS D'AMPLITUDE dans le temps. Quand micro A capte "personne qui parle" et micro B capte "silence" au meme instant (parce que la personne B ne parle pas), les envelopes ne correspondent pas → confiance quasi nulle → offset aleatoire.
 
 ## Architecture et decisions
 
-### Pipeline actuel
+### Pipeline
 ```
-Pistes SyncWave (V1, V2, A1, A2) avec clips groupes par piste
+Pistes SyncWave (V1, V2, V3, A1, A2, A3)
        ↓
-FFmpeg → raw PCM Float32 48kHz mono (par clip)
+FFmpeg → raw PCM Float32 48kHz mono
        ↓
 Python sync_multi.py :
-  - Groupe les clips par session (1er de chaque piste = session 1)
-  - Dans chaque session : anchor = clip le plus long
-  - Correle chaque clip contre l'anchor (envelope cross-correlation)
-  - Chaine les sessions avec gap de 2min
+  1. Groupe par session (1er clip de chaque piste = session 1)
+  2. ALL-PAIRS correlation entre pistes differentes
+  3. Greedy graph : positionne via les meilleures correspondances
        ↓
-JSON positions → Swift SyncEngine → ExportEngine → FCP 7 XML
+JSON positions → Swift → ExportEngine → FCP 7 XML
 ```
 
-### Le bug de sync (cause probable)
-L'envelope cross-correlation renvoie des offsets incorrects pour certaines paires de fichiers (camera vs enregistreur externe). Le meme algorithme fonctionne en mode simple (prouve avec 81% confiance) mais echoue en multi-clips. Hypotheses :
-1. Les fichiers audio du recorder (WAV) ne sont pas tous lisibles par FFmpeg (dossiers 5176/5177 corrompus, seul 5178 fonctionne)
-2. Le signe de l'offset est peut-etre inverse pour certaines paires
-3. L'anchor (clip le plus long) n'est pas toujours le bon choix
-4. La correlation entre des sources tres differentes (camera vs micro externe) est naturellement faible
+### Pourquoi l'algo echoue sur les micros individuels
+L'envelope d'un micro solo (1 personne) a une forme TRES differente de l'envelope d'un autre micro solo (autre personne). La cross-correlation mesure la similarite des enveloppes, donc elle echoue quand les enveloppes sont fondamentalement differentes.
+
+**Solution proposee pour la prochaine session :**
+1. Utiliser l'audio des CAMERAS (qui capte le mix ambiant de toutes les voix) comme reference pour la correlation
+2. Les cameras correleront bien entre elles (elles captent le meme mix)
+3. Les micros individuels seront places au meme offset que leur session (pas correles individuellement)
+4. Ou : detecter que deux clips sont de la meme session par leurs metadonnees (duree similaire, timestamps de fichier)
 
 ### Convention de signe
-`timeline_offset = -python_correlation_lag` (documente dans tasks/lessons.md)
+`timeline_offset = -python_correlation_lag`
 
-### Export XML — Mapping des pistes
-- SyncWave V1 → Premiere V1 (video) + A1 (audio stereo L+R)
-- SyncWave V2 → Premiere V2 (video) + A2 (audio stereo L+R)
-- SyncWave A1 → Premiere A3 (audio standalone stereo)
-- SyncWave A2 → Premiere A4 (audio standalone stereo)
-- Les clips d'une meme piste SyncWave sont des `<clipitem>` dans le meme `<track>` XML
+### Export XML
+- SyncWave V1 → Premiere V1 + A1 (video + audio stereo)
+- SyncWave V2 → Premiere V2 + A2
+- SyncWave A1 → Premiere A(N+1) (audio standalone)
+- Clips d'une meme piste = plusieurs clipitems dans le meme track XML
+
+### Sparkle
+- Cle publique EdDSA : `1AvZry8Dl0dM3/B2UjkbZeziG7erROR+03HNyrP8T+E=`
+- Appcast : `https://raw.githubusercontent.com/Lenouw/SyncWave/main/appcast.xml`
+- `create-release.sh` signe le zip et met a jour l'appcast automatiquement
 
 ## Ce qu'il reste a faire
-- [ ] **PRIORITE 1 : Fixer la synchronisation multi-clips** — les offsets sont incorrects. Debug approche : executer sync_multi.py manuellement avec logs stderr, comparer les offsets produits avec ceux attendus (reference : screenshot Premiere montre tous les clips d'une session alignes).
-- [ ] **PRIORITE 2 : UI pistes audio associees aux videos** — V1 devrait montrer A1 en dessous dans la timeline SyncWave
-- [ ] **PRIORITE 3 : Precision sub-ms** — affinage cross-correlation fine apres l'envelope coarse
-- [ ] Support des WAV proprietaires (certains fichiers de l'enregistreur ne sont pas lisibles par FFmpeg)
+- [ ] **PRIORITE 1 : Fixer la sync multi-micros** — utiliser l'audio des cameras (mix ambiant) comme reference au lieu des micros individuels. Les cameras captent toutes le meme son → bonne correlation. Placer les micros individuels au meme offset que leur session.
+- [ ] **PRIORITE 2 : UI pistes audio associees aux videos** — V1 devrait montrer A1 en dessous
+- [ ] **PRIORITE 3 : Precision sub-ms** — affinage cross-correlation fine
+- [ ] Detection automatique des sessions par metadonnees (timestamps, durees similaires)
+- [ ] Tolerance aux erreurs (clip sur la mauvaise piste → detecter et repositionner)
 - [ ] Waveform visuelle sur les clips
 - [ ] Distribution .dmg
 
 ## Problemes connus
-- **Sync multi-clips incorrect** : les offsets produits par sync_multi.py sont faux. Les clips d'une meme session ne sont pas alignes dans Premiere.
-- **Certains WAV illisibles** : les fichiers des dossiers 5176 et 5177 de l'enregistreur ne sont pas lisibles par FFmpeg ("Invalid data found when processing input"). Seul le dossier 5178 fonctionne.
+- **Sync micros individuels** : l'envelope cross-correlation echoue quand chaque micro capte une personne differente. Confiance 5-7% entre micros solos → offsets aleatoires.
+- **Certains WAV illisibles** : les fichiers de certains dossiers du recorder ne sont pas lisibles par FFmpeg
 - **Python/scipy requis** : l'app necessite Python 3 + scipy + numpy
 
 ## Notes pour la prochaine session
-- Repo : https://github.com/Lenouw/SyncWave
+- Repo : https://github.com/Lenouw/SyncWave (v1.2.0)
 - App : /Applications/SyncWave.app
-- **Le moteur de sync** est `Scripts/sync_multi.py` — c'est LA qu'il faut debugger
-- **L'export XML** est `Sources/SyncWave/Engine/ExportEngine.swift` — le mapping est CORRECT
-- **Le SyncEngine Swift** est `Sources/SyncWave/Engine/SyncEngine.swift` — appelle Python
-- **Fichiers de test** : Dropbox `2026-Rushs Tournage Podcast/03 - Mars 2026/2026-03-17 Akalai Yanis/`
-  - CAM 2 : 20260317_Cam2-2752.MP4, 20260317_Cam2-2753.MP4
-  - CAM 3 : 20260317_Cam3-1728.MP4, 20260317_Cam3-1729.MP4
-  - AUDIO : dossier 5178 (Track1-Mic 1.wav, Stereo Mix.wav) — seul dossier lisible par FFmpeg
-- **Screenshot de reference** : l'utilisateur a montre le resultat correct de Premiere (tous clips alignes par session)
-- Pour builder : `swift build -c release && bash Scripts/build-release.sh`
-- **Approche de debug** : executer `python3 Scripts/sync_multi.py /tmp/manifest.json 2>/dev/null` et lire stderr pour voir exactement quels offsets sont produits pour chaque paire
+- **Moteur de sync** : `Scripts/sync_multi.py` — la section "Syncing session" fait le all-pairs + greedy graph
+- **Export XML** : `Sources/SyncWave/Engine/ExportEngine.swift` — mapping correct
+- **Fichiers test podcast multi-invites** : dossiers 5160 + 5161 dans le Dropbox du 17 fev 2026
+  - 3 cameras (Cam1, Cam2, Cam3) × 2 sessions
+  - Micros individuels : Audio JS, Audio Laura, Audio Vanina, Gaelle Audio, js audio, sherazad
+- **L'algo qui FONCTIONNE** : quand on correle camera vs camera ou camera vs enregistreur commun (81-89% confiance)
+- **L'algo qui ECHOUE** : quand on correle micro solo A vs micro solo B (5-7% confiance)
+- **Approche PluralEyes** : PluralEyes ne correlait pas les micros individuels entre eux. Il utilisait les cameras comme pont, car elles captent le mix ambiant.
