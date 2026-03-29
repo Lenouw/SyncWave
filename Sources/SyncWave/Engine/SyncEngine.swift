@@ -27,8 +27,6 @@ final class SyncEngine {
         let startTime = CFAbsoluteTimeGetCurrent()
         var alignments: [SyncAlignment] = []
 
-        let windowDuration: TimeInterval = 10.0
-
         // Full preprocessing: DC removal → bandpass → normalize — used for long recordings.
         let refProcessed = reference
             .removeDCOffset()
@@ -81,7 +79,7 @@ final class SyncEngine {
                 confidence = directResult.confidence
             }
 
-            var finalOffsetSeconds = coarseOffsetSeconds
+            let finalOffsetSeconds = coarseOffsetSeconds
 
             // Drift correction only for long recordings (> 5 min)
             var driftPPM: Double = 0
