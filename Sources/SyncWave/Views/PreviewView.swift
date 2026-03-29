@@ -1,6 +1,23 @@
 import SwiftUI
 import AVKit
 
+/// NSViewRepresentable wrapper for AVPlayerView (avoids _AVKit_SwiftUI crash in SPM builds)
+struct NativePlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .inline
+        view.showsFullScreenToggleButton = false
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        nsView.player = player
+    }
+}
+
 struct PreviewView: View {
     @EnvironmentObject var appState: AppState
     @State private var player: AVPlayer?
@@ -8,8 +25,9 @@ struct PreviewView: View {
     var body: some View {
         ZStack {
             Color.black
-            if let player { VideoPlayer(player: player) }
-            else {
+            if let player {
+                NativePlayerView(player: player)
+            } else {
                 VStack(spacing: 8) {
                     Image(systemName: "play.rectangle").font(.system(size: 32)).foregroundStyle(.secondary)
                     Text("Aperçu vidéo").font(.caption).foregroundStyle(.tertiary)
@@ -17,7 +35,9 @@ struct PreviewView: View {
             }
         }
         .onChange(of: appState.project.clips) { _, clips in
-            if let first = clips.first(where: { $0.isVideo }) { player = AVPlayer(url: first.url) }
+            if let first = clips.first(where: { $0.isVideo }) {
+                player = AVPlayer(url: first.url)
+            }
         }
     }
 }
