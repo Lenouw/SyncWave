@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Background gradient: deep blue top to teal bottom -->
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a3a5c"/>
+      <stop offset="100%" stop-color="#2aaa6a"/>
+    </linearGradient>
+    <!-- Top highlight glow -->
+    <radialGradient id="highlightGrad" cx="50%" cy="15%" r="45%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Waveform glow filters -->
+    <filter id="glowBlue" x="-20%" y="-50%" width="140%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glowTeal" x="-20%" y="-50%" width="140%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- Drop shadow -->
+    <filter id="shadow" x="-5%" y="-5%" width="115%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="18" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <!-- Clip to squircle -->
+    <clipPath id="squircleClip">
+      <rect x="40" y="40" width="944" height="944" rx="200" ry="200"/>
+    </clipPath>
+  </defs>
+
+  <!-- Drop shadow layer -->
+  <rect x="40" y="40" width="944" height="944" rx="200" ry="200"
+        fill="#000000" opacity="0.25" filter="url(#shadow)" transform="translate(0,8)"/>
+
+  <!-- Background squircle -->
+  <rect x="40" y="40" width="944" height="944" rx="200" ry="200"
+        fill="url(#bgGrad)"/>
+
+  <!-- Subtle top highlight -->
+  <rect x="40" y="40" width="944" height="944" rx="200" ry="200"
+        fill="url(#highlightGrad)"/>
+
+  <!-- === Top waveform (blue-white) === -->
+  <!-- Amplitude envelope: tapers at both ends, peaks in middle -->
+  <g filter="url(#glowBlue)" clip-path="url(#squircleClip)">
+    <path d="
+      M 160 392
+      C 185 392, 195 340, 220 340
+      C 245 340, 255 444, 280 444
+      C 305 444, 315 310, 340 310
+      C 365 310, 375 475, 400 475
+      C 425 475, 435 300, 460 300
+      C 485 300, 495 490, 512 490
+      C 529 490, 539 300, 564 300
+      C 589 300, 599 475, 624 475
+      C 649 475, 659 310, 684 310
+      C 709 310, 719 444, 744 444
+      C 769 444, 779 340, 804 340
+      C 829 340, 839 392, 864 392
+    " fill="none" stroke="rgba(180,220,255,0.9)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Glow duplicate -->
+    <path d="
+      M 160 392
+      C 185 392, 195 340, 220 340
+      C 245 340, 255 444, 280 444
+      C 305 444, 315 310, 340 310
+      C 365 310, 375 475, 400 475
+      C 425 475, 435 300, 460 300
+      C 485 300, 495 490, 512 490
+      C 529 490, 539 300, 564 300
+      C 589 300, 599 475, 624 475
+      C 649 475, 659 310, 684 310
+      C 709 310, 719 444, 744 444
+      C 769 444, 779 340, 804 340
+      C 829 340, 839 392, 864 392
+    " fill="none" stroke="rgba(180,220,255,0.3)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- === Bottom waveform (teal-green) === -->
+  <g filter="url(#glowTeal)" clip-path="url(#squircleClip)">
+    <path d="
+      M 160 632
+      C 185 632, 195 580, 220 580
+      C 245 580, 255 684, 280 684
+      C 305 684, 315 550, 340 550
+      C 365 550, 375 715, 400 715
+      C 425 715, 435 540, 460 540
+      C 485 540, 495 730, 512 730
+      C 529 730, 539 540, 564 540
+      C 589 540, 599 715, 624 715
+      C 649 715, 659 550, 684 550
+      C 709 550, 719 684, 744 684
+      C 769 684, 779 580, 804 580
+      C 829 580, 839 632, 864 632
+    " fill="none" stroke="rgba(80,255,180,0.9)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Glow duplicate -->
+    <path d="
+      M 160 632
+      C 185 632, 195 580, 220 580
+      C 245 580, 255 684, 280 684
+      C 305 684, 315 550, 340 550
+      C 365 550, 375 715, 400 715
+      C 425 715, 435 540, 460 540
+      C 485 540, 495 730, 512 730
+      C 529 730, 539 540, 564 540
+      C 589 540, 599 715, 624 715
+      C 649 715, 659 550, 684 550
+      C 709 550, 719 684, 744 684
+      C 769 684, 779 580, 804 580
+      C 829 580, 839 632, 864 632
+    " fill="none" stroke="rgba(80,255,180,0.3)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- === Center sync line === -->
+  <line x1="512" y1="282" x2="512" y2="742"
+        stroke="rgba(255,255,255,0.6)" stroke-width="4" stroke-linecap="round"
+        stroke-dasharray="0"/>
+
+  <!-- === Sync arrows pointing inward === -->
+  <!-- Top arrow (pointing down) -->
+  <polygon points="512,468  490,438  534,438"
+           fill="rgba(255,255,255,0.85)"/>
+  <!-- Bottom arrow (pointing up) -->
+  <polygon points="512,556  490,586  534,586"
+           fill="rgba(255,255,255,0.85)"/>
+
+  <!-- === Center dot (snap point) === -->
+  <circle cx="512" cy="512" r="10" fill="rgba(255,255,255,0.95)"/>
+  <circle cx="512" cy="512" r="20" fill="rgba(255,255,255,0.15)"/>
+</svg>
