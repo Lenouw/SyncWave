@@ -1,8 +1,6 @@
 import Foundation
 
 enum ProjectMode: Equatable {
-    case none       // Not chosen yet (show WelcomeView)
-    case simple     // Sync rapide
     case multiClip  // Multi-clips with tracks
 }
 
@@ -23,9 +21,9 @@ struct Track: Identifiable, Equatable {
 }
 
 struct Project {
-    var mode: ProjectMode = .none
-    var clips: [MediaClip] = []         // Mode simple
-    var tracks: [Track] = []            // Mode multi-clips
+    var mode: ProjectMode = .multiClip
+    var clips: [MediaClip] = []
+    var tracks: [Track] = Project.defaultTracks()
     var syncResult: SyncResult?
     var exportSettings: ExportSettings = ExportSettings()
 
@@ -34,6 +32,16 @@ struct Project {
     }
 
     var hasContent: Bool {
-        !clips.isEmpty || tracks.contains(where: { !$0.clips.isEmpty })
+        tracks.contains(where: { !$0.clips.isEmpty })
+    }
+
+    static func defaultTracks() -> [Track] {
+        [
+            Track(name: "V1", type: .video),
+            Track(name: "V2", type: .video),
+            Track(name: "A1", type: .audio),
+            Track(name: "A2", type: .audio),
+            Track(name: "A3", type: .audio),
+        ]
     }
 }

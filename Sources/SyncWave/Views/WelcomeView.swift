@@ -20,19 +20,11 @@ struct WelcomeView: View {
             // Mode cards
             HStack(spacing: 20) {
                 ModeCard(
-                    icon: "bolt.fill",
-                    iconColor: .blue,
-                    title: "Sync rapide",
-                    description: "Glissez tous vos fichiers, la synchronisation est automatique.\nIdéal pour un enregistrement continu.",
-                    action: { appState.setMode(.simple) }
-                )
-
-                ModeCard(
                     icon: "rectangle.stack.fill",
                     iconColor: .green,
                     title: "Multi-clips",
                     description: "Organisez vos fichiers par piste (V1, V2, A1...).\nIdéal pour les tournages avec coupures.",
-                    action: { appState.setMode(.multiClip) }
+                    action: { /* no-op: app starts directly in multi-clip mode */ }
                 )
             }
             .padding(.horizontal, 40)

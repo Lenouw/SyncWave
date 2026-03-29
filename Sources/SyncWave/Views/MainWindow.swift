@@ -6,34 +6,21 @@ struct MainWindow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if appState.project.mode == .none {
-                WelcomeView()
-            } else {
-                toolbar
+            toolbar
 
-                if appState.project.mode == .simple {
-                    if appState.hasClips {
-                        mainContent
-                    } else {
-                        ImportDropZone()
-                    }
-                } else {
-                    // Multi-clip mode
-                    HStack(spacing: 0) {
-                        PreviewView()
-                            .frame(height: 220)
-                        SyncStatusPanel()
-                            .frame(width: 220, height: 220)
-                    }
+            HStack(spacing: 0) {
+                PreviewView()
                     .frame(height: 220)
-
-                    Divider()
-
-                    MultiTrackTimelineView()
-                }
-
-                statusBar
+                SyncStatusPanel()
+                    .frame(width: 220, height: 220)
             }
+            .frame(height: 220)
+
+            Divider()
+
+            MultiTrackTimelineView()
+
+            statusBar
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .sheet(isPresented: $showExportSheet) { ExportSheet() }
@@ -46,8 +33,6 @@ struct MainWindow: View {
             } label: {
                 Label("Nouveau projet", systemImage: "plus.square")
             }
-            Divider().frame(height: 20)
-            Button { openFileDialog() } label: { Label("Importer", systemImage: "plus") }
             Divider().frame(height: 20)
             Button { Task { await appState.sync() } } label: { Label("Synchroniser", systemImage: "play.fill") }
                 .disabled(!appState.canSync || appState.isSyncing).tint(.red)
@@ -63,17 +48,6 @@ struct MainWindow: View {
         .padding(.horizontal, 14).padding(.vertical, 8).background(.bar)
     }
 
-    private var mainContent: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                PreviewView().frame(height: 220)
-                SyncStatusPanel().frame(width: 220, height: 220)
-            }
-            Divider()
-            TimelineView()
-        }
-    }
-
     private var statusBar: some View {
         HStack {
             if appState.isSyncing { ProgressView(value: appState.syncProgress).frame(width: 100) }
@@ -83,11 +57,4 @@ struct MainWindow: View {
         .padding(.horizontal, 14).padding(.vertical, 4).background(.bar)
     }
 
-    private func openFileDialog() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseFiles = true
-        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie, .wav, .aiff, .mp3, .mpeg4Audio]
-        if panel.runModal() == .OK { Task { await appState.importFiles(urls: panel.urls) } }
-    }
 }

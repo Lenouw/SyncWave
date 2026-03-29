@@ -19,7 +19,8 @@ struct ImportDropZone: View {
             for provider in providers {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let url else { return }
-                    Task { @MainActor in await appState.importFiles(urls: [url]) }
+                    // importFiles removed — use importToTrack(trackID:urls:) instead
+                    _ = url
                 }
             }
             return true

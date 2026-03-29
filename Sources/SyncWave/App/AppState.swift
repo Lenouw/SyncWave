@@ -12,40 +12,16 @@ final class AppState: ObservableObject {
     private let exportEngine = ExportEngine()
 
     var hasClips: Bool {
-        if project.mode == .multiClip {
-            return project.tracks.contains { !$0.clips.isEmpty }
-        }
-        return !project.clips.isEmpty
+        project.tracks.contains { !$0.clips.isEmpty }
     }
     var hasSyncResult: Bool { project.syncResult != nil }
 
     var canSync: Bool {
-        if project.mode == .multiClip {
-            // Need at least 2 tracks with clips
-            let tracksWithClips = project.tracks.filter { !$0.clips.isEmpty }
-            return tracksWithClips.count >= 2
-        }
-        return project.clips.count >= 2
+        project.tracks.filter { !$0.clips.isEmpty }.count >= 2
     }
 
     var totalClipCount: Int {
-        if project.mode == .multiClip {
-            return project.tracks.reduce(0) { $0 + $1.clips.count }
-        }
-        return project.clips.count
-    }
-
-    func setMode(_ mode: ProjectMode) {
-        project.mode = mode
-        if mode == .multiClip {
-            project.tracks = [
-                Track(name: "V1", type: .video),
-                Track(name: "V2", type: .video),
-                Track(name: "A1", type: .audio),
-                Track(name: "A2", type: .audio),
-                Track(name: "A3", type: .audio),
-            ]
-        }
+        project.tracks.reduce(0) { $0 + $1.clips.count }
     }
 
     func addTrack(type: Track.TrackType) {
@@ -111,38 +87,11 @@ final class AppState: ObservableObject {
         statusMessage = nil
     }
 
-    func importFiles(urls: [URL]) async {
-        for url in urls {
-            let ext = url.pathExtension.lowercased()
-            let videoExts = ["mov", "mp4", "m4v", "mxf", "avi", "mts", "m2ts"]
-            let audioExts = ["wav", "aiff", "aif", "mp3", "aac", "m4a"]
-            guard videoExts.contains(ext) || audioExts.contains(ext) else { continue }
-
-            let isVideo = videoExts.contains(ext)
-            let duration = await getMediaDuration(url: url)
-            let hasAudio = await hasAudioTrack(url: url)
-            let fps = isVideo ? await getFrameRate(url: url) : 30.0
-
-            let clip = MediaClip(
-                url: url, filename: url.lastPathComponent,
-                duration: duration, hasAudioTrack: hasAudio,
-                audioSampleRate: 48000, isVideo: isVideo,
-                frameRate: fps
-            )
-            project.clips.append(clip)
-        }
-    }
-
     func sync() async {
-        // Collect all clips from either mode
-        let allClips: [MediaClip]
-        if project.mode == .multiClip {
-            allClips = project.tracks.flatMap(\.clips)
-            // Also populate project.clips for sync engine and export compatibility
-            project.clips = allClips
-        } else {
-            allClips = project.clips
-        }
+        // Collect all clips from tracks
+        let allClips = project.tracks.flatMap(\.clips)
+        // Populate project.clips for sync engine and export compatibility
+        project.clips = allClips
 
         guard allClips.count >= 2 else {
             statusMessage = "Minimum 2 clips requis"
