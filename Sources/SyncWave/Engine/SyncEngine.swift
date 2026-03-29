@@ -235,6 +235,29 @@ final class SyncEngine {
         )
     }
 
+    /// Normalize envelope: subtract mean and divide by std (zero-center + unit variance).
+    private func normalizeEnvelope(_ envelope: AudioBuffer) -> AudioBuffer {
+        let samples = envelope.samples
+        guard samples.count > 1 else { return envelope }
+
+        var mean: Float = 0
+        vDSP_meanv(samples, 1, &mean, vDSP_Length(samples.count))
+
+        var centered = [Float](repeating: 0, count: samples.count)
+        var negMean = -mean
+        vDSP_vsadd(samples, 1, &negMean, &centered, 1, vDSP_Length(samples.count))
+
+        var rms: Float = 0
+        vDSP_rmsqv(centered, 1, &rms, vDSP_Length(samples.count))
+        guard rms > 1e-10 else { return AudioBuffer(samples: centered, sampleRate: envelope.sampleRate, channelCount: 1) }
+
+        var scale = 1.0 / rms
+        var normalized = [Float](repeating: 0, count: samples.count)
+        vDSP_vsmul(centered, 1, &scale, &normalized, 1, vDSP_Length(samples.count))
+
+        return AudioBuffer(samples: normalized, sampleRate: envelope.sampleRate, channelCount: 1)
+    }
+
     /// Coefficient of variation of an envelope. Low = flat signal, high = dynamic signal.
     private func envelopeVariance(_ samples: [Float]) -> Double {
         guard samples.count > 1 else { return 0 }
@@ -322,8 +345,16 @@ final class SyncEngine {
                 let envelopeUsable = refVar > minCV && tgtVar > minCV
 
                 if envelopeUsable {
-                    let coarseResult = try correlator.findOffset(reference: refEnvelope, target: tgtEnvelope)
-                    coarseOffsetSeconds = -coarseResult.offsetSeconds
+                    // Normalize envelopes (subtract mean, divide by std) before correlation.
+                    // Raw envelopes are always positive (RMS) with large DC — must zero-center.
+                    let refEnvNorm = normalizeEnvelope(refEnvelope)
+                    let tgtEnvNorm = normalizeEnvelope(tgtEnvelope)
+
+                    // Use PLAIN cross-correlation for envelopes (not GCC-PHAT).
+                    // PHAT whitening destroys envelope signals because they lack
+                    // the spectral structure that PHAT is designed to exploit.
+                    let coarseResult = plainCrossCorrelation(reference: refEnvNorm, target: tgtEnvNorm)
+                    coarseOffsetSeconds = coarseResult.offsetSeconds
                     confidence = coarseResult.confidence
                 } else {
                     // Fallback: downsample to 4kHz to keep FFT manageable (max ~30s worth of samples)
