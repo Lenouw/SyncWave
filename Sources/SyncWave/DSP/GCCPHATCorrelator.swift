@@ -31,31 +31,123 @@ struct GCCPHATCorrelator {
         let tgtSamples = target.samples
 
         // --- Step 1: GCC-PHAT to find the lag ---
-        let lag = gccphatLag(ref: refSamples, tgt: tgtSamples)
+        let (lag, peakConfidence) = gccphatLagWithConfidence(ref: refSamples, tgt: tgtSamples)
 
-        // --- Step 2: Normalized cross-correlation at detected lag for confidence ---
-        let confidence = normalizedCrossCorr(ref: refSamples, tgt: tgtSamples, lag: lag)
+        // --- Step 2: Use peak-to-mean ratio as primary confidence ---
+        // NCC is too strict for signals from different microphones.
+        // Peak-to-mean ratio detects a clear peak regardless of waveform similarity.
+        let ncc = abs(normalizedCrossCorr(ref: refSamples, tgt: tgtSamples, lag: lag))
+        // Use the higher of the two confidence measures
+        let confidence = max(ncc, peakConfidence)
 
         let offsetSamples = Double(lag)
         return CorrelationResult(
             offsetSamples: offsetSamples,
             offsetSeconds: offsetSamples / reference.sampleRate,
-            confidence: abs(confidence)
+            confidence: confidence
         )
     }
 
     // MARK: - Private helpers
 
-    /// Compute GCC-PHAT correlation and return the lag in samples.
+    /// Compute GCC-PHAT correlation and return the lag in samples plus peak-to-mean confidence.
     /// Convention: positive lag means target is delayed relative to reference.
+    private func gccphatLagWithConfidence(ref: [Float], tgt: [Float]) -> (lag: Int, confidence: Double) {
+        let (lag, _) = gccphatLagInternal(ref: ref, tgt: tgt)
+        return (lag, gccphatPeakConfidence(ref: ref, tgt: tgt))
+    }
+
+    /// Compute peak-to-mean ratio from GCC-PHAT correlation as confidence.
+    /// A clear, sharp peak (even if small) gives high confidence.
+    private func gccphatPeakConfidence(ref: [Float], tgt: [Float]) -> Double {
+        let totalLength = ref.count + tgt.count
+        let log2n = vDSP_Length(ceil(log2(Double(totalLength))))
+        let fftSize = Int(1 << log2n)
+
+        guard let fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else { return 0 }
+        defer { vDSP_destroy_fftsetup(fftSetup) }
+
+        let halfSize = fftSize / 2
+        let (refR, refI) = fftForward(ref, fftSetup: fftSetup, log2n: log2n, fftSize: fftSize, halfSize: halfSize)
+        let (tgtR, tgtI) = fftForward(tgt, fftSetup: fftSetup, log2n: log2n, fftSize: fftSize, halfSize: halfSize)
+
+        var crossReal = [Float](repeating: 0, count: halfSize)
+        var crossImag = [Float](repeating: 0, count: halfSize)
+        var tmp = [Float](repeating: 0, count: halfSize)
+
+        vDSP_vmul(tgtR, 1, refR, 1, &crossReal, 1, vDSP_Length(halfSize))
+        vDSP_vmul(tgtI, 1, refI, 1, &tmp, 1, vDSP_Length(halfSize))
+        vDSP_vadd(crossReal, 1, tmp, 1, &crossReal, 1, vDSP_Length(halfSize))
+
+        vDSP_vmul(tgtI, 1, refR, 1, &crossImag, 1, vDSP_Length(halfSize))
+        vDSP_vmul(tgtR, 1, refI, 1, &tmp, 1, vDSP_Length(halfSize))
+        vDSP_vsub(tmp, 1, crossImag, 1, &crossImag, 1, vDSP_Length(halfSize))
+
+        // No PHAT whitening — use raw cross-power spectrum for peak detection
+        // IFFT
+        var correlation = [Float](repeating: 0, count: fftSize)
+        crossReal.withUnsafeMutableBufferPointer { rPtr in
+            crossImag.withUnsafeMutableBufferPointer { iPtr in
+                var split = DSPSplitComplex(realp: rPtr.baseAddress!, imagp: iPtr.baseAddress!)
+                vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(kFFTDirection_Inverse))
+                correlation.withUnsafeMutableBufferPointer { corrPtr in
+                    corrPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfSize) { complexPtr in
+                        vDSP_ztoc(&split, 1, complexPtr, 2, vDSP_Length(halfSize))
+                    }
+                }
+            }
+        }
+
+        var absCorr = [Float](repeating: 0, count: fftSize)
+        vDSP_vabs(correlation, 1, &absCorr, 1, vDSP_Length(fftSize))
+
+        var maxVal: Float = 0
+        var maxIdx: vDSP_Length = 0
+        vDSP_maxvi(absCorr, 1, &maxVal, &maxIdx, vDSP_Length(fftSize))
+
+        var meanVal: Float = 0
+        vDSP_meanv(absCorr, 1, &meanVal, vDSP_Length(fftSize))
+
+        // Peak-to-mean ratio, normalized to 0-1 range
+        // A ratio > 5 means a very clear peak. We map 1→0, 10→1.
+        guard meanVal > 0 else { return 0 }
+        let ratio = Double(maxVal / meanVal)
+        let confidence = min(1.0, max(0, (ratio - 1.0) / 9.0))
+        return confidence
+    }
+
+    /// Helper: compute forward FFT
+    private func fftForward(_ signal: [Float], fftSetup: FFTSetup, log2n: vDSP_Length, fftSize: Int, halfSize: Int) -> ([Float], [Float]) {
+        var padded = [Float](repeating: 0, count: fftSize)
+        padded.replaceSubrange(0..<min(signal.count, fftSize), with: signal.prefix(fftSize))
+        var r = [Float](repeating: 0, count: halfSize)
+        var im = [Float](repeating: 0, count: halfSize)
+        padded.withUnsafeMutableBufferPointer { paddedPtr in
+            paddedPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfSize) { complexPtr in
+                r.withUnsafeMutableBufferPointer { rPtr in
+                    im.withUnsafeMutableBufferPointer { iPtr in
+                        var split = DSPSplitComplex(realp: rPtr.baseAddress!, imagp: iPtr.baseAddress!)
+                        vDSP_ctoz(complexPtr, 2, &split, 1, vDSP_Length(halfSize))
+                        vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(kFFTDirection_Forward))
+                    }
+                }
+            }
+        }
+        return (r, im)
+    }
+
     private func gccphatLag(ref: [Float], tgt: [Float]) -> Int {
+        return gccphatLagInternal(ref: ref, tgt: tgt).lag
+    }
+
+    private func gccphatLagInternal(ref: [Float], tgt: [Float]) -> (lag: Int, absCorr: [Float]) {
         let totalLength = ref.count + tgt.count
         let log2n = vDSP_Length(ceil(log2(Double(totalLength))))
         let fftSize = Int(1 << log2n)
         let halfSize = fftSize / 2
 
         guard let fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else {
-            return 0
+            return (lag: 0, absCorr: [])
         }
         defer { vDSP_destroy_fftsetup(fftSetup) }
 
@@ -175,7 +267,7 @@ struct GCCPHATCorrelator {
             }
         }
 
-        return detectedLag
+        return (lag: detectedLag, absCorr: absCorr)
     }
 
     /// Convert a circular FFT index to a signed lag.
