@@ -105,9 +105,16 @@ def main():
             except Exception as e:
                 sys.stderr.write(f"  [{track['name']}] ERROR: {e}\n")
 
-    # Step 2: Group clips by session
-    # Session N = Nth clip on each track
-    # Find max number of clips per track
+    # Step 2: Sort clips within each track by filename, then group by session
+    # This ensures consistent ordering regardless of how the user dropped files.
+    sys.stderr.write(f"\nSorting clips by filename within each track...\n")
+    for track in tracks:
+        track["clips"].sort(key=lambda c: clip_data[c["id"]]["name"] if c["id"] in clip_data else "")
+        for c in track["clips"]:
+            if c["id"] in clip_data:
+                sys.stderr.write(f"  [{track['name']}] {clip_data[c['id']]['name']}\n")
+
+    # Session N = Nth clip on each track (after sorting)
     max_clips_per_track = max((len(t["clips"]) for t in tracks), default=0)
     sys.stderr.write(f"\n{max_clips_per_track} session(s) detected\n")
 
