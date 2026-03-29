@@ -250,27 +250,138 @@ final class SyncEngine {
         return Double(stddev / mean) // coefficient of variation
     }
 
+    /// Progress callback with percentage (0-1) and a status message.
+    typealias ProgressCallback = (Double, String) -> Void
+
     /// Full pipeline: extract audio from files, then sync.
     func syncFiles(
         referenceURL: URL,
         targetURLs: [(label: String, url: URL)],
-        progress: ((Double) -> Void)? = nil
+        progress: ProgressCallback? = nil
     ) async throws -> SyncOutput {
-        let totalSteps = Double(targetURLs.count + 1)
-        var currentStep = 0.0
+        // Total phases: extract ref (1) + extract each target (N) + sync each target (N * 4 sub-steps)
+        let n = Double(targetURLs.count)
+        let extractWeight = 0.4  // 40% of time = extraction
+        let syncWeight = 0.6     // 60% of time = DSP processing
 
+        // Phase 1: Extract reference audio
+        let refName = referenceURL.lastPathComponent
+        progress?(0.01, "Extraction audio : \(refName)...")
         let referenceBuffer = try await extractor.extract(from: referenceURL)
-        currentStep += 1
-        progress?(currentStep / totalSteps)
+        progress?(extractWeight / (n + 1), "Extraction audio : \(refName) ✓")
 
+        // Phase 2: Extract target audio
         var targets: [(label: String, buffer: AudioBuffer)] = []
-        for (label, url) in targetURLs {
+        for (i, (label, url)) in targetURLs.enumerated() {
+            progress?(extractWeight * Double(i + 1) / (n + 1), "Extraction audio : \(label)...")
             let buffer = try await extractor.extract(from: url)
             targets.append((label: label, buffer: buffer))
-            currentStep += 1
-            progress?(currentStep / totalSteps)
+            progress?(extractWeight * Double(i + 2) / (n + 1), "Extraction audio : \(label) ✓")
         }
 
-        return try syncBuffers(reference: referenceBuffer, targets: targets)
+        // Phase 3: Preprocessing
+        progress?(extractWeight, "Preprocessing : filtrage et normalisation...")
+        let refProcessed = referenceBuffer
+            .removeDCOffset()
+            .bandpassFiltered(lowFreq: 200, highFreq: 4000)
+            .normalized()
+
+        var processedTargets: [(label: String, raw: AudioBuffer, processed: AudioBuffer)] = []
+        for (label, buffer) in targets {
+            let processed = buffer
+                .removeDCOffset()
+                .bandpassFiltered(lowFreq: 200, highFreq: 4000)
+                .normalized()
+            processedTargets.append((label: label, raw: buffer, processed: processed))
+        }
+        progress?(extractWeight + 0.05, "Preprocessing terminé")
+
+        // Phase 4: Sync each target
+        let startTime = CFAbsoluteTimeGetCurrent()
+        var alignments: [SyncAlignment] = []
+        let syncStepWeight = syncWeight / max(1, n)
+
+        for (i, (label, raw, processed)) in processedTargets.enumerated() {
+            let baseProgress = extractWeight + 0.05 + syncStepWeight * Double(i)
+
+            // Step 1: Envelope correlation
+            progress?(baseProgress + syncStepWeight * 0.1, "Corrélation enveloppe : \(label)...")
+
+            let useEnvelope = referenceBuffer.duration > 3.0 && raw.duration > 3.0
+            let coarseOffsetSeconds: TimeInterval
+            var confidence: Double
+
+            if useEnvelope {
+                let refEnvelope = refProcessed.energyEnvelope(windowSeconds: 0.02, hopSeconds: 0.005)
+                let tgtEnvelope = processed.energyEnvelope(windowSeconds: 0.02, hopSeconds: 0.005)
+
+                let refVar = envelopeVariance(refEnvelope.samples)
+                let tgtVar = envelopeVariance(tgtEnvelope.samples)
+                let envelopeUsable = refVar > 0.4 && tgtVar > 0.4
+
+                if envelopeUsable {
+                    let coarseResult = try correlator.findOffset(reference: refEnvelope, target: tgtEnvelope)
+                    coarseOffsetSeconds = -coarseResult.offsetSeconds
+                    confidence = coarseResult.confidence
+                } else {
+                    let directResult = try correlator.findOffset(reference: referenceBuffer, target: raw)
+                    coarseOffsetSeconds = directResult.offsetSeconds
+                    confidence = directResult.confidence
+                }
+            } else {
+                let directResult = try correlator.findOffset(reference: referenceBuffer, target: raw)
+                coarseOffsetSeconds = directResult.offsetSeconds
+                confidence = directResult.confidence
+            }
+
+            progress?(baseProgress + syncStepWeight * 0.5, "Affinage sub-ms : \(label)...")
+
+            // Step 2: Fine alignment
+            var finalOffsetSeconds = coarseOffsetSeconds
+
+            if useEnvelope && refProcessed.sampleCount > 0 && processed.sampleCount > 0 {
+                let searchWindowSeconds = 0.2
+                let extractWindowSeconds = 2.0
+                let refCenterTime = refProcessed.duration / 2.0
+                let tgtCenterTime = refCenterTime - coarseOffsetSeconds
+
+                let refWindow = refProcessed.window(centerSeconds: refCenterTime, windowSeconds: extractWindowSeconds)
+                let tgtWindow = processed.window(
+                    centerSeconds: tgtCenterTime,
+                    windowSeconds: extractWindowSeconds + searchWindowSeconds * 2
+                )
+
+                if refWindow.sampleCount > 1000 && tgtWindow.sampleCount > 1000 {
+                    let fineResult = plainCrossCorrelation(reference: refWindow, target: tgtWindow)
+                    if abs(fineResult.offsetSeconds) < searchWindowSeconds {
+                        finalOffsetSeconds = coarseOffsetSeconds + fineResult.offsetSeconds
+                        confidence = max(confidence, fineResult.confidence)
+                    }
+                }
+            }
+
+            progress?(baseProgress + syncStepWeight * 0.8, "Drift : \(label)...")
+
+            // Step 3: Drift correction
+            var driftPPM: Double = 0
+            if referenceBuffer.duration > 300 && raw.duration > 300 {
+                let driftResult = try driftCorrector.detectDrift(reference: refProcessed, target: processed)
+                driftPPM = driftResult.driftPPM
+            }
+
+            alignments.append(SyncAlignment(
+                label: label,
+                offset: finalOffsetSeconds,
+                driftPPM: driftPPM,
+                confidence: confidence
+            ))
+
+            progress?(baseProgress + syncStepWeight, "\(label) synchronisé ✓")
+        }
+
+        let processingTime = CFAbsoluteTimeGetCurrent() - startTime
+        progress?(1.0, "Synchronisation terminée")
+
+        return SyncOutput(alignments: alignments, processingTime: processingTime)
     }
 }

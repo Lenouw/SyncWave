@@ -134,7 +134,10 @@ final class AppState: ObservableObject {
         do {
             let result = try await syncEngine.syncFiles(
                 referenceURL: refClip.url, targetURLs: targetURLs,
-                progress: { [weak self] p in Task { @MainActor in self?.syncProgress = p } }
+                progress: { [weak self] p, msg in Task { @MainActor in
+                    self?.syncProgress = p
+                    self?.statusMessage = msg
+                } }
             )
 
             for alignment in result.alignments {
