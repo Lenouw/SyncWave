@@ -90,7 +90,6 @@ final class AppState: ObservableObject {
     func sync() async {
         // Collect all clips from tracks
         let allClips = project.tracks.flatMap(\.clips)
-        // Populate project.clips for sync engine and export compatibility
         project.clips = allClips
 
         guard allClips.count >= 2 else {
@@ -98,32 +97,27 @@ final class AppState: ObservableObject {
             return
         }
 
-        // Reference = longest clip
-        guard let refClip = allClips.max(by: { $0.duration < $1.duration }) else { return }
-
         isSyncing = true
         syncProgress = 0
         statusMessage = "Synchronisation en cours..."
 
-        // Reset all clips to 0 progress, mark reference as done
+        // Reset all clips to 0 progress
         for i in 0..<project.clips.count {
-            project.clips[i].processingProgress = project.clips[i].id == refClip.id ? 1.0 : 0.0
+            project.clips[i].processingProgress = 0
         }
 
-        let targetURLs = project.clips
-            .filter { $0.id != refClip.id && $0.canSync }
-            .map { (label: $0.filename, url: $0.url) }
-
         do {
-            let result = try await syncEngine.syncFiles(
-                referenceURL: refClip.url, targetURLs: targetURLs,
+            // Use multi-clip sync: correlates ALL pairs across tracks
+            let result = try await syncEngine.syncTracks(
+                tracks: project.tracks,
                 progress: { [weak self] p, msg in Task { @MainActor in
                     self?.syncProgress = p
                     self?.statusMessage = msg
-                    self?.updateClipProgress(message: msg, globalProgress: p, targetCount: targetURLs.count)
+                    self?.updateClipProgress(message: msg, globalProgress: p, targetCount: allClips.count)
                 } }
             )
 
+            // Apply results to clips
             for alignment in result.alignments {
                 if let idx = project.clips.firstIndex(where: { $0.filename == alignment.label }) {
                     project.clips[idx].applySyncResult(
@@ -132,8 +126,12 @@ final class AppState: ObservableObject {
                 }
             }
 
+            // Find the anchor clip (the one at offset 0 or with highest confidence)
+            let anchorClip = project.clips.first(where: { $0.offset == 0 })
+                ?? project.clips.max(by: { ($0.confidence ?? 0) < ($1.confidence ?? 0) })
+
             project.syncResult = SyncResult(
-                referenceClipID: refClip.id,
+                referenceClipID: anchorClip?.id ?? allClips[0].id,
                 alignments: result.alignments.compactMap { a in
                     guard let clip = project.clips.first(where: { $0.filename == a.label }) else { return nil }
                     return ClipAlignment(clipID: clip.id, offset: a.offset, driftPPM: a.driftPPM, confidence: a.confidence)
