@@ -9,7 +9,6 @@ struct ExportSheet: View {
             Text("Exporter la synchronisation").font(.headline)
             VStack(alignment: .leading, spacing: 12) {
                 HStack { Text("Format :").foregroundStyle(.secondary); Text(appState.project.exportSettings.format.rawValue).fontWeight(.medium) }
-                Toggle("Remplacer l'audio des vidéos par l'audio externe", isOn: $appState.project.exportSettings.replaceAudioInVideo)
                 Toggle("Inclure les clips non synchronisés", isOn: $appState.project.exportSettings.includeUnsyncedClips)
             }.padding().background(RoundedRectangle(cornerRadius: 8).fill(.bar))
 

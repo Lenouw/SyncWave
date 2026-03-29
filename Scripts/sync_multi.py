@@ -126,9 +126,10 @@ def main():
         sessions.append(session_clips)
         sys.stderr.write(f"  Session {session_idx+1}: {len(session_clips)} clips\n")
 
-    # Step 3: Sync within each session using ALL-PAIRS correlation + greedy graph
-    # This handles individual mics (each captures a different person) by finding
-    # the best correlation partner for each clip, not just one fixed anchor.
+    # Step 3: Sync within each session — CAMERAS FIRST, then audio vs cameras
+    # Cameras capture ambient room mix → correlate well with each other.
+    # Individual mics capture different people → don't correlate with each other.
+    # Strategy: position cameras first, then position audio clips against cameras.
     positions = {}
     session_end = 0.0
     GAP_BETWEEN_SESSIONS = 120.0
@@ -145,76 +146,141 @@ def main():
             session_end += clip_data[cid]["duration"] + GAP_BETWEEN_SESSIONS
             continue
 
-        clip_ids = [c["id"] for c in session_clips]
+        # Separate video and audio clips
+        video_clips = [c for c in session_clips if clip_data[c["id"]]["track"].startswith("V")]
+        audio_clips = [c for c in session_clips if clip_data[c["id"]]["track"].startswith("A")]
 
-        # Compute ALL pairwise correlations within this session (across different tracks)
-        edges = []  # (id_a, id_b, offset_b_relative_to_a, confidence)
-        for i, id_a in enumerate(clip_ids):
-            for j, id_b in enumerate(clip_ids):
-                if j <= i:
-                    continue
-                # Only correlate clips from DIFFERENT tracks
-                if clip_data[id_a]["track"] == clip_data[id_b]["track"]:
-                    continue
+        sys.stderr.write(f"  {len(video_clips)} video + {len(audio_clips)} audio clips\n")
 
-                env_a = clip_data[id_a]["env"]
-                env_b = clip_data[id_b]["env"]
-                offset, conf = correlate_pair(env_a, env_b, env_sr)
-                timeline_offset = -offset  # negate for timeline convention
+        session_positions = {}
+        session_confidence = {}
 
-                # Sanity check: reject offsets > longest clip duration
-                max_dur = max(clip_data[id_a]["duration"], clip_data[id_b]["duration"])
-                if abs(timeline_offset) > max_dur:
-                    continue
+        # --- Phase 1: Correlate cameras with each other ---
+        if len(video_clips) >= 2:
+            sys.stderr.write(f"  Phase 1: Camera-to-camera correlation\n")
+            cam_edges = []
+            cam_ids = [c["id"] for c in video_clips]
+            for i, id_a in enumerate(cam_ids):
+                for j, id_b in enumerate(cam_ids):
+                    if j <= i:
+                        continue
+                    env_a = clip_data[id_a]["env"]
+                    env_b = clip_data[id_b]["env"]
+                    offset, conf = correlate_pair(env_a, env_b, env_sr)
+                    timeline_offset = -offset
+                    max_dur = max(clip_data[id_a]["duration"], clip_data[id_b]["duration"])
+                    if abs(timeline_offset) > max_dur:
+                        continue
+                    cam_edges.append((id_a, id_b, timeline_offset, conf))
+                    sys.stderr.write(f"    {clip_data[id_a]['name'][:20]} vs {clip_data[id_b]['name'][:20]}: {timeline_offset:+.1f}s, {conf:.0%}\n")
 
-                edges.append((id_a, id_b, timeline_offset, conf))
-                name_a = clip_data[id_a]["name"].split("_")[-1][:15]
-                name_b = clip_data[id_b]["name"].split("_")[-1][:15]
-                sys.stderr.write(f"  {name_a} vs {name_b}: {timeline_offset:+.1f}s, {conf:.0%}\n")
+            cam_edges.sort(key=lambda e: e[3], reverse=True)
 
-        # Sort edges by confidence (highest first)
-        edges.sort(key=lambda e: e[3], reverse=True)
+            # Anchor = best-connected camera
+            conf_sums = {}
+            for id_a, id_b, _, conf in cam_edges:
+                conf_sums[id_a] = conf_sums.get(id_a, 0) + conf
+                conf_sums[id_b] = conf_sums.get(id_b, 0) + conf
 
-        # Pick anchor: clip with highest total confidence across all edges
-        conf_sums = {}
-        for id_a, id_b, _, conf in edges:
-            conf_sums[id_a] = conf_sums.get(id_a, 0) + conf
-            conf_sums[id_b] = conf_sums.get(id_b, 0) + conf
+            anchor_id = max(conf_sums, key=conf_sums.get) if conf_sums else cam_ids[0]
+            session_positions[anchor_id] = 0.0
+            session_confidence[anchor_id] = 1.0
+            sys.stderr.write(f"  Anchor: {clip_data[anchor_id]['name']}\n")
 
-        if conf_sums:
-            anchor_id = max(conf_sums, key=conf_sums.get)
-        else:
-            anchor_id = clip_ids[0]
+            # Position other cameras via greedy graph
+            changed = True
+            while changed:
+                changed = False
+                for id_a, id_b, offset, conf in cam_edges:
+                    if id_a in session_positions and id_b not in session_positions:
+                        session_positions[id_b] = session_positions[id_a] + offset
+                        session_confidence[id_b] = conf
+                        sys.stderr.write(f"  → {clip_data[id_b]['name'][:20]}: {session_positions[id_b]:+.1f}s ({conf:.0%})\n")
+                        changed = True
+                        break
+                    elif id_b in session_positions and id_a not in session_positions:
+                        session_positions[id_a] = session_positions[id_b] - offset
+                        session_confidence[id_a] = conf
+                        sys.stderr.write(f"  → {clip_data[id_a]['name'][:20]}: {session_positions[id_a]:+.1f}s ({conf:.0%})\n")
+                        changed = True
+                        break
 
-        sys.stderr.write(f"  Anchor: {clip_data[anchor_id]['name']} (best connected)\n")
-        session_positions = {anchor_id: 0.0}
-        session_confidence = {anchor_id: 1.0}
+        elif len(video_clips) == 1:
+            # Single camera = anchor
+            cid = video_clips[0]["id"]
+            session_positions[cid] = 0.0
+            session_confidence[cid] = 1.0
+            sys.stderr.write(f"  Single camera anchor: {clip_data[cid]['name']}\n")
 
-        # Greedy graph: always take the highest-confidence edge that connects
-        # an already-positioned clip to an unpositioned one
-        changed = True
-        while changed:
-            changed = False
-            for id_a, id_b, offset, conf in edges:
-                if id_a in session_positions and id_b not in session_positions:
-                    session_positions[id_b] = session_positions[id_a] + offset
-                    session_confidence[id_b] = conf
-                    sys.stderr.write(f"  → {clip_data[id_b]['name']}: {session_positions[id_b]:+.1f}s via {clip_data[id_a]['name']} ({conf:.0%})\n")
-                    changed = True
-                    break
-                elif id_b in session_positions and id_a not in session_positions:
-                    session_positions[id_a] = session_positions[id_b] - offset
-                    session_confidence[id_a] = conf
-                    sys.stderr.write(f"  → {clip_data[id_a]['name']}: {session_positions[id_a]:+.1f}s via {clip_data[id_b]['name']} ({conf:.0%})\n")
-                    changed = True
-                    break
+        # --- Phase 2: Position audio clips against cameras ---
+        positioned_video_ids = [c["id"] for c in video_clips if c["id"] in session_positions]
 
-        # Place unpositioned clips at 0 with 0 confidence
-        for cid in clip_ids:
+        if positioned_video_ids and audio_clips:
+            sys.stderr.write(f"  Phase 2: Audio-to-camera correlation\n")
+            for ac in audio_clips:
+                acid = ac["id"]
+                best_offset = 0.0
+                best_conf = 0.0
+                best_via = None
+
+                for vid in positioned_video_ids:
+                    env_v = clip_data[vid]["env"]
+                    env_a = clip_data[acid]["env"]
+                    offset, conf = correlate_pair(env_v, env_a, env_sr)
+                    timeline_offset = -offset
+                    max_dur = max(clip_data[vid]["duration"], clip_data[acid]["duration"])
+                    if abs(timeline_offset) > max_dur:
+                        continue
+                    if conf > best_conf:
+                        best_conf = conf
+                        best_offset = session_positions[vid] + timeline_offset
+                        best_via = vid
+
+                if best_via:
+                    session_positions[acid] = best_offset
+                    session_confidence[acid] = best_conf
+                    sys.stderr.write(f"  → {clip_data[acid]['name'][:25]}: {best_offset:+.1f}s via {clip_data[best_via]['name'][:15]} ({best_conf:.0%})\n")
+                else:
+                    session_positions[acid] = 0.0
+                    session_confidence[acid] = 0.0
+                    sys.stderr.write(f"  ⚠ {clip_data[acid]['name'][:25]}: no match, placed at 0\n")
+
+        # --- Fallback: no video clips, correlate all audio pairs ---
+        elif not video_clips and audio_clips:
+            sys.stderr.write(f"  Fallback: audio-only session, all-pairs\n")
+            all_ids = [c["id"] for c in audio_clips]
+            fallback_edges = []
+            for i, id_a in enumerate(all_ids):
+                for j, id_b in enumerate(all_ids):
+                    if j <= i: continue
+                    if clip_data[id_a]["track"] == clip_data[id_b]["track"]: continue
+                    offset, conf = correlate_pair(clip_data[id_a]["env"], clip_data[id_b]["env"], env_sr)
+                    tl = -offset
+                    if abs(tl) > max(clip_data[id_a]["duration"], clip_data[id_b]["duration"]): continue
+                    fallback_edges.append((id_a, id_b, tl, conf))
+            fallback_edges.sort(key=lambda e: e[3], reverse=True)
+            if fallback_edges:
+                anchor_id = all_ids[0]
+                session_positions[anchor_id] = 0.0
+                session_confidence[anchor_id] = 1.0
+                changed = True
+                while changed:
+                    changed = False
+                    for id_a, id_b, offset, conf in fallback_edges:
+                        if id_a in session_positions and id_b not in session_positions:
+                            session_positions[id_b] = session_positions[id_a] + offset
+                            session_confidence[id_b] = conf; changed = True; break
+                        elif id_b in session_positions and id_a not in session_positions:
+                            session_positions[id_a] = session_positions[id_b] - offset
+                            session_confidence[id_a] = conf; changed = True; break
+
+        # Place any remaining unpositioned clips
+        for c in session_clips:
+            cid = c["id"]
             if cid not in session_positions:
                 session_positions[cid] = 0.0
                 session_confidence[cid] = 0.0
-                sys.stderr.write(f"  ⚠ {clip_data[cid]['name']}: unpositioned, placed at 0\n")
+                sys.stderr.write(f"  ⚠ {clip_data[cid]['name']}: unpositioned\n")
 
         # Normalize within session so minimum = 0, then shift by session_end
         min_pos = min(session_positions.values())
