@@ -51,8 +51,10 @@ struct MultiTrackTimelineView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 1) {
-                        // Vidéo en haut, audio en bas (comme un NLE)
-                        ForEach(videoTracks) { track in
+                        // Convention NLE : vidéo empilée de bas en haut (V6 en haut, V1 en bas)
+                        // Audio empilée de haut en bas (A1 en haut, A6 en bas)
+                        // V1 et A1 sont collés au séparateur central
+                        ForEach(videoTracks.reversed()) { track in
                             TrackRowView(track: track)
                         }
                         if !videoTracks.isEmpty && !audioTracks.isEmpty {
