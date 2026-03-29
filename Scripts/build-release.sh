@@ -33,6 +33,10 @@ mkdir -p "$APP_DIR/Contents/Resources"
 # Copy executable
 cp ".build/release/$APP_NAME" "$APP_DIR/Contents/MacOS/$APP_NAME"
 
+# Copy Python scripts to Resources
+cp Scripts/sync_multi.py "$APP_DIR/Contents/Resources/sync_multi.py"
+cp Scripts/sync_correlate.py "$APP_DIR/Contents/Resources/sync_correlate.py"
+
 # Copy icon if exists
 if [ -f "Resources/icon_1024.png" ]; then
     # Try to create icns from png
