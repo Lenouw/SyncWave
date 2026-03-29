@@ -62,7 +62,14 @@ final class SyncEngine {
 
             let rawPath = FileManager.default.temporaryDirectory
                 .appendingPathComponent("syncwave_\(clip.id.uuidString).raw")
-            try await extractToRawFile(url: clip.url, output: rawPath)
+
+            do {
+                try await extractToRawFile(url: clip.url, output: rawPath)
+            } catch {
+                // Skip clips that can't be extracted (corrupted WAV, unsupported format)
+                progress?(Double(i + 1) / totalClips * 0.4, "⚠ \(clip.filename) : extraction échouée, ignoré")
+                continue
+            }
 
             let trackName = tracks.first(where: { $0.clips.contains(where: { $0.id == clip.id }) })?.name ?? "?"
             clipPaths.append((

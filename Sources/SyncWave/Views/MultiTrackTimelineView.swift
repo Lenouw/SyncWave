@@ -4,6 +4,18 @@ import UniformTypeIdentifiers
 struct MultiTrackTimelineView: View {
     @EnvironmentObject var appState: AppState
 
+    /// Total timeline duration: max(offset + duration) across all synced clips.
+    private var totalDuration: TimeInterval {
+        let allClips = appState.project.clips
+        if allClips.isEmpty {
+            // Fallback to track clips (before sync)
+            let trackClips = appState.project.tracks.flatMap(\.clips)
+            return trackClips.map(\.duration).max() ?? 1
+        }
+        let maxEnd = allClips.map { ($0.offset ?? 0) + $0.duration }.max() ?? 1
+        return max(1, maxEnd)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Toolbar: add tracks
@@ -22,7 +34,7 @@ struct MultiTrackTimelineView: View {
 
                 Spacer()
 
-                if appState.project.hasContent {
+                if totalClipCount > 0 {
                     Text("\(totalClipCount) clips")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -32,11 +44,13 @@ struct MultiTrackTimelineView: View {
             .padding(.vertical, 8)
             .background(.bar)
 
+            // Time ruler
+            timeRuler
+
             Divider()
 
             // Tracks
             if appState.project.tracks.isEmpty {
-                // Empty state
                 VStack(spacing: 12) {
                     Image(systemName: "rectangle.stack.badge.plus")
                         .font(.system(size: 36))
@@ -51,23 +65,52 @@ struct MultiTrackTimelineView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 1) {
-                        // Convention NLE : vidéo empilée de bas en haut (V6 en haut, V1 en bas)
-                        // Audio empilée de haut en bas (A1 en haut, A6 en bas)
-                        // V1 et A1 sont collés au séparateur central
+                        // Convention NLE : V en haut (reversed), A en bas
                         ForEach(videoTracks.reversed()) { track in
-                            TrackRowView(track: track)
+                            TrackRowView(track: track, totalDuration: totalDuration)
                         }
                         if !videoTracks.isEmpty && !audioTracks.isEmpty {
                             Divider().padding(.vertical, 2)
                         }
                         ForEach(audioTracks) { track in
-                            TrackRowView(track: track)
+                            TrackRowView(track: track, totalDuration: totalDuration)
                         }
                     }
                     .padding(.vertical, 4)
                 }
             }
         }
+    }
+
+    private var timeRuler: some View {
+        HStack(spacing: 0) {
+            Rectangle().fill(Color.clear).frame(width: 62) // label width
+
+            GeometryReader { geo in
+                let duration = totalDuration
+                let interval = duration > 3600 ? 600.0 : duration > 600 ? 120.0 : duration > 60 ? 30.0 : 10.0
+                let marks = stride(from: 0.0, through: duration, by: interval)
+
+                ForEach(Array(marks.enumerated()), id: \.offset) { _, t in
+                    let x = geo.size.width * CGFloat(t / duration)
+                    VStack(spacing: 0) {
+                        Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 1, height: 6)
+                        Text(formatTime(t))
+                            .font(.system(size: 8, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .position(x: x, y: 10)
+                }
+            }
+        }
+        .frame(height: 20)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private func formatTime(_ seconds: TimeInterval) -> String {
+        let m = Int(seconds) / 60
+        let s = Int(seconds) % 60
+        return String(format: "%02d:%02d", m, s)
     }
 
     private var videoTracks: [Track] {
