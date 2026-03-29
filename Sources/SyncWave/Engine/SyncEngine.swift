@@ -110,8 +110,14 @@ final class SyncEngine {
 
         let manifestPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("syncwave_manifest.json")
-        let manifestData = try JSONSerialization.data(withJSONObject: manifest)
+        let manifestData = try JSONSerialization.data(withJSONObject: manifest, options: .prettyPrinted)
         try manifestData.write(to: manifestPath)
+
+        // Debug: save manifest to Desktop for inspection
+        let debugManifestPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop/syncwave_debug_manifest.json")
+        try? manifestData.write(to: debugManifestPath)
+        print("[DEBUG] Manifest saved to Desktop/syncwave_debug_manifest.json")
 
         progress?(0.45, "Analyse des correspondances entre pistes...")
 
