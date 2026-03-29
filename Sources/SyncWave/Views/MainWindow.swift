@@ -50,9 +50,12 @@ struct MainWindow: View {
             Button { openFileDialog() } label: { Label("Importer", systemImage: "plus") }
             Divider().frame(height: 20)
             Button { Task { await appState.sync() } } label: { Label("Synchroniser", systemImage: "play.fill") }
-                .disabled(appState.project.clips.count < 2 || appState.isSyncing).tint(.red)
+                .disabled(!appState.canSync || appState.isSyncing).tint(.red)
             Spacer()
-            if appState.hasClips { Text("\(appState.project.clips.count) clips").font(.caption).foregroundStyle(.secondary) }
+            if appState.hasClips {
+                let count = appState.totalClipCount
+                Text("\(count) clips").font(.caption).foregroundStyle(.secondary)
+            }
             Divider().frame(height: 20)
             Button { showExportSheet = true } label: { Label("Exporter XML", systemImage: "square.and.arrow.up") }
                 .disabled(!appState.hasSyncResult)

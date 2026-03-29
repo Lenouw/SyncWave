@@ -19,6 +19,22 @@ final class AppState: ObservableObject {
     }
     var hasSyncResult: Bool { project.syncResult != nil }
 
+    var canSync: Bool {
+        if project.mode == .multiClip {
+            // Need at least 2 tracks with clips
+            let tracksWithClips = project.tracks.filter { !$0.clips.isEmpty }
+            return tracksWithClips.count >= 2
+        }
+        return project.clips.count >= 2
+    }
+
+    var totalClipCount: Int {
+        if project.mode == .multiClip {
+            return project.tracks.reduce(0) { $0 + $1.clips.count }
+        }
+        return project.clips.count
+    }
+
     func setMode(_ mode: ProjectMode) {
         project.mode = mode
         if mode == .multiClip {
@@ -118,10 +134,23 @@ final class AppState: ObservableObject {
     }
 
     func sync() async {
-        guard project.clips.count >= 2, let refClip = project.referenceClip else {
+        // Collect all clips from either mode
+        let allClips: [MediaClip]
+        if project.mode == .multiClip {
+            allClips = project.tracks.flatMap(\.clips)
+            // Also populate project.clips for sync engine and export compatibility
+            project.clips = allClips
+        } else {
+            allClips = project.clips
+        }
+
+        guard allClips.count >= 2 else {
             statusMessage = "Minimum 2 clips requis"
             return
         }
+
+        // Reference = longest clip
+        guard let refClip = allClips.max(by: { $0.duration < $1.duration }) else { return }
 
         isSyncing = true
         syncProgress = 0
@@ -142,7 +171,6 @@ final class AppState: ObservableObject {
                 progress: { [weak self] p, msg in Task { @MainActor in
                     self?.syncProgress = p
                     self?.statusMessage = msg
-                    // Update per-clip progress based on message
                     self?.updateClipProgress(message: msg, globalProgress: p, targetCount: targetURLs.count)
                 } }
             )
