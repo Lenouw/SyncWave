@@ -90,8 +90,9 @@ final class SyncEngine {
 
                 // Find a point in the reference that has good content (middle of the clip)
                 let refCenterTime = refProcessed.duration / 2.0
-                // The corresponding point in the target, accounting for the coarse offset
-                let tgtCenterTime = refCenterTime + coarseOffsetSeconds
+                // The corresponding point in the target, accounting for the coarse offset.
+                // If target starts +5s later on timeline, an event at ref T=12s is at target T=12-5=7s.
+                let tgtCenterTime = refCenterTime - coarseOffsetSeconds
 
                 // Extract 2-second windows from both signals
                 let refWindow = refProcessed.window(centerSeconds: refCenterTime, windowSeconds: extractWindowSeconds)
@@ -225,11 +226,11 @@ final class SyncEngine {
         let denom = sqrt(Double(refEnergy) * Double(tgtEnergy))
         let confidence = denom > 1e-30 ? Double(maxVal) / denom : 0
 
-        // Negate offset (same convention fix as envelope)
-        let finalOffset = -offsetSamples
+        // No negation for fine alignment: we're measuring residual offset within aligned windows.
+        // Positive = target content appears later in the window = needs more positive timeline offset.
         return CorrelationResult(
-            offsetSamples: Double(finalOffset),
-            offsetSeconds: Double(finalOffset) / reference.sampleRate,
+            offsetSamples: Double(offsetSamples),
+            offsetSeconds: Double(offsetSamples) / reference.sampleRate,
             confidence: min(1.0, confidence)
         )
     }
