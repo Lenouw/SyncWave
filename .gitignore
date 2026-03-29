@@ -11,3 +11,4 @@ build/
 .build/
 .swiftpm/
 Video et audio pour test/
+dist/
