@@ -68,13 +68,16 @@ struct ExportEngine {
             premiereAudioTrackIndex += 1  // A(N) paired with V(N)
             let audioChBaseIndex = (premiereAudioTrackIndex - 1) * 2 + 1  // 1-based stereo pair
 
+            // Sort clips by offset (chronological order) — Premiere requires this
+            let sortedClips = vTrack.clips.sorted { (offsetMap[$0.id] ?? 0) < (offsetMap[$1.id] ?? 0) }
+
             // Video track with all clips
             videoTracksXML += "        <track>\n"
             // Audio tracks (ch1 and ch2) with all clips
             var audioCh1XML = "        <track>\n"
             var audioCh2XML = "        <track>\n"
 
-            for (clipIndexOnTrack, clip) in vTrack.clips.enumerated() {
+            for (clipIndexOnTrack, clip) in sortedClips.enumerated() {
                 let clipIdx = clipIndexOnTrack + 1  // 1-based clip index on this track
                 let offset = (offsetMap[clip.id] ?? 0) - minOffset
                 let startFrame = Int(offset * Double(frameRate))
@@ -144,10 +147,13 @@ struct ExportEngine {
             premiereAudioTrackIndex += 1
             let audioChBaseIndex = (premiereAudioTrackIndex - 1) * 2 + 1
 
+            // Sort clips by offset (chronological order)
+            let sortedAudioClips = aTrack.clips.sorted { (offsetMap[$0.id] ?? 0) < (offsetMap[$1.id] ?? 0) }
+
             var audioCh1XML = "        <track>\n"
             var audioCh2XML = "        <track>\n"
 
-            for (clipIndexOnTrack, clip) in aTrack.clips.enumerated() {
+            for (clipIndexOnTrack, clip) in sortedAudioClips.enumerated() {
                 let clipIdx = clipIndexOnTrack + 1
                 let offset = (offsetMap[clip.id] ?? 0) - minOffset
                 let startFrame = Int(offset * Double(frameRate))
