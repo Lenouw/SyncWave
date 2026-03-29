@@ -24,11 +24,13 @@ final class AppState: ObservableObject {
             let isVideo = videoExts.contains(ext)
             let duration = await getMediaDuration(url: url)
             let hasAudio = await hasAudioTrack(url: url)
+            let fps = isVideo ? await getFrameRate(url: url) : 30.0
 
             let clip = MediaClip(
                 url: url, filename: url.lastPathComponent,
                 duration: duration, hasAudioTrack: hasAudio,
-                audioSampleRate: 48000, isVideo: isVideo
+                audioSampleRate: 48000, isVideo: isVideo,
+                frameRate: fps
             )
             project.clips.append(clip)
         }
@@ -80,8 +82,12 @@ final class AppState: ObservableObject {
     func exportXML(to destination: URL? = nil) async -> URL? {
         guard let syncResult = project.syncResult else { return nil }
         do {
+            // Use the reference clip's frame rate for the sequence
+            let refFPS = project.referenceClip?.frameRate ?? 30.0
+            let seqFrameRate = Int(round(refFPS))
             let xml = try exportEngine.generateFCP7XML(
-                clips: project.clips, syncResult: syncResult, settings: project.exportSettings
+                clips: project.clips, syncResult: syncResult, settings: project.exportSettings,
+                frameRate: seqFrameRate
             )
             if let destination {
                 try xml.write(to: destination, atomically: true, encoding: .utf8)
@@ -106,5 +112,12 @@ final class AppState: ObservableObject {
     private func hasAudioTrack(url: URL) async -> Bool {
         let asset = AVAsset(url: url)
         return !((try? await asset.loadTracks(withMediaType: .audio)) ?? []).isEmpty
+    }
+
+    private func getFrameRate(url: URL) async -> Double {
+        let asset = AVAsset(url: url)
+        guard let videoTrack = try? await asset.loadTracks(withMediaType: .video).first else { return 30.0 }
+        let fps = (try? await videoTrack.load(.nominalFrameRate)) ?? 30.0
+        return Double(fps)
     }
 }

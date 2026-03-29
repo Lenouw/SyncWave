@@ -79,7 +79,40 @@ final class SyncEngine {
                 confidence = directResult.confidence
             }
 
-            let finalOffsetSeconds = coarseOffsetSeconds
+            // Phase 2: Fine alignment using plain cross-correlation on bandpass-filtered audio.
+            // The envelope gives ~5ms accuracy. We refine to sub-millisecond (~0.02ms at 48kHz)
+            // by correlating a narrow window of the preprocessed audio around the coarse offset.
+            var finalOffsetSeconds = coarseOffsetSeconds
+
+            if useEnvelope && refProcessed.sampleCount > 0 && tgtProcessed.sampleCount > 0 {
+                let searchWindowSeconds = 0.2 // ±200ms search range around coarse offset
+                let extractWindowSeconds = 2.0 // 2 seconds of audio for correlation
+
+                // Find a point in the reference that has good content (middle of the clip)
+                let refCenterTime = refProcessed.duration / 2.0
+                // The corresponding point in the target, accounting for the coarse offset
+                let tgtCenterTime = refCenterTime + coarseOffsetSeconds
+
+                // Extract 2-second windows from both signals
+                let refWindow = refProcessed.window(centerSeconds: refCenterTime, windowSeconds: extractWindowSeconds)
+                // Extract a wider window from target to allow for the search range
+                let tgtWindow = tgtProcessed.window(
+                    centerSeconds: tgtCenterTime,
+                    windowSeconds: extractWindowSeconds + searchWindowSeconds * 2
+                )
+
+                if refWindow.sampleCount > 1000 && tgtWindow.sampleCount > 1000 {
+                    // Plain cross-correlation (not GCC-PHAT — more reliable for fine alignment)
+                    let fineResult = plainCrossCorrelation(reference: refWindow, target: tgtWindow)
+                    let fineOffsetSeconds = fineResult.offsetSeconds
+
+                    // Accept the fine result only if it's within the search window (plausible)
+                    if abs(fineOffsetSeconds) < searchWindowSeconds {
+                        finalOffsetSeconds = coarseOffsetSeconds + fineOffsetSeconds
+                        confidence = max(confidence, fineResult.confidence)
+                    }
+                }
+            }
 
             // Drift correction only for long recordings (> 5 min)
             var driftPPM: Double = 0
@@ -99,6 +132,105 @@ final class SyncEngine {
         return SyncOutput(
             alignments: alignments,
             processingTime: CFAbsoluteTimeGetCurrent() - startTime
+        )
+    }
+
+    /// Plain (non-PHAT) cross-correlation via FFT for fine sub-millisecond alignment.
+    /// More reliable than GCC-PHAT for fine refinement because it preserves amplitude info.
+    private func plainCrossCorrelation(reference: AudioBuffer, target: AudioBuffer) -> CorrelationResult {
+        let refSamples = reference.samples
+        let tgtSamples = target.samples
+        let totalLength = refSamples.count + tgtSamples.count
+        let log2n = vDSP_Length(ceil(log2(Double(totalLength))))
+        let fftSize = Int(1 << log2n)
+        let halfSize = fftSize / 2
+
+        guard let fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else {
+            return CorrelationResult(offsetSamples: 0, offsetSeconds: 0, confidence: 0)
+        }
+        defer { vDSP_destroy_fftsetup(fftSetup) }
+
+        // Forward FFT helper
+        func forwardFFT(_ signal: [Float]) -> ([Float], [Float]) {
+            var padded = [Float](repeating: 0, count: fftSize)
+            padded.replaceSubrange(0..<min(signal.count, fftSize), with: signal.prefix(fftSize))
+            var r = [Float](repeating: 0, count: halfSize)
+            var im = [Float](repeating: 0, count: halfSize)
+            padded.withUnsafeMutableBufferPointer { paddedPtr in
+                paddedPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfSize) { complexPtr in
+                    r.withUnsafeMutableBufferPointer { rPtr in
+                        im.withUnsafeMutableBufferPointer { iPtr in
+                            var split = DSPSplitComplex(realp: rPtr.baseAddress!, imagp: iPtr.baseAddress!)
+                            vDSP_ctoz(complexPtr, 2, &split, 1, vDSP_Length(halfSize))
+                            vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(kFFTDirection_Forward))
+                        }
+                    }
+                }
+            }
+            return (r, im)
+        }
+
+        let (refR, refI) = forwardFFT(refSamples)
+        let (tgtR, tgtI) = forwardFFT(tgtSamples)
+
+        // Cross-power spectrum: tgt * conj(ref) — NO whitening (plain cross-correlation)
+        var crossReal = [Float](repeating: 0, count: halfSize)
+        var crossImag = [Float](repeating: 0, count: halfSize)
+        var tmp = [Float](repeating: 0, count: halfSize)
+
+        vDSP_vmul(tgtR, 1, refR, 1, &crossReal, 1, vDSP_Length(halfSize))
+        vDSP_vmul(tgtI, 1, refI, 1, &tmp, 1, vDSP_Length(halfSize))
+        vDSP_vadd(crossReal, 1, tmp, 1, &crossReal, 1, vDSP_Length(halfSize))
+
+        vDSP_vmul(tgtI, 1, refR, 1, &crossImag, 1, vDSP_Length(halfSize))
+        vDSP_vmul(tgtR, 1, refI, 1, &tmp, 1, vDSP_Length(halfSize))
+        vDSP_vsub(tmp, 1, crossImag, 1, &crossImag, 1, vDSP_Length(halfSize))
+
+        // IFFT
+        var correlation = [Float](repeating: 0, count: fftSize)
+        crossReal.withUnsafeMutableBufferPointer { rPtr in
+            crossImag.withUnsafeMutableBufferPointer { iPtr in
+                var split = DSPSplitComplex(realp: rPtr.baseAddress!, imagp: iPtr.baseAddress!)
+                vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(kFFTDirection_Inverse))
+                correlation.withUnsafeMutableBufferPointer { corrPtr in
+                    corrPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfSize) { complexPtr in
+                        vDSP_ztoc(&split, 1, complexPtr, 2, vDSP_Length(halfSize))
+                    }
+                }
+            }
+        }
+
+        // Scale
+        var scale = 1.0 / Float(fftSize)
+        vDSP_vsmul(correlation, 1, &scale, &correlation, 1, vDSP_Length(fftSize))
+
+        // Find peak
+        var absCorr = [Float](repeating: 0, count: fftSize)
+        vDSP_vabs(correlation, 1, &absCorr, 1, vDSP_Length(fftSize))
+
+        var maxVal: Float = 0
+        var maxIdx: vDSP_Length = 0
+        vDSP_maxvi(absCorr, 1, &maxVal, &maxIdx, vDSP_Length(fftSize))
+
+        var offsetSamples = Int(maxIdx)
+        if offsetSamples > fftSize / 2 {
+            offsetSamples -= fftSize
+        }
+
+        // Normalized confidence
+        var refEnergy: Float = 0
+        var tgtEnergy: Float = 0
+        vDSP_svesq(refSamples, 1, &refEnergy, vDSP_Length(refSamples.count))
+        vDSP_svesq(tgtSamples, 1, &tgtEnergy, vDSP_Length(tgtSamples.count))
+        let denom = sqrt(Double(refEnergy) * Double(tgtEnergy))
+        let confidence = denom > 1e-30 ? Double(maxVal) / denom : 0
+
+        // Negate offset (same convention fix as envelope)
+        let finalOffset = -offsetSamples
+        return CorrelationResult(
+            offsetSamples: Double(finalOffset),
+            offsetSeconds: Double(finalOffset) / reference.sampleRate,
+            confidence: min(1.0, confidence)
         )
     }
 
