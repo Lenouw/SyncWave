@@ -77,15 +77,21 @@ final class AppState: ObservableObject {
         isSyncing = false
     }
 
-    func exportXML() async -> URL? {
+    func exportXML(to destination: URL? = nil) async -> URL? {
         guard let syncResult = project.syncResult else { return nil }
         do {
             let xml = try exportEngine.generateFCP7XML(
                 clips: project.clips, syncResult: syncResult, settings: project.exportSettings
             )
-            let url = try exportEngine.exportToFile(xml: xml, directory: project.exportSettings.outputDirectory)
-            statusMessage = "✓ Export: \(url.lastPathComponent)"
-            return url
+            if let destination {
+                try xml.write(to: destination, atomically: true, encoding: .utf8)
+                statusMessage = "✓ Export: \(destination.lastPathComponent)"
+                return destination
+            } else {
+                let url = try exportEngine.exportToFile(xml: xml, directory: project.exportSettings.outputDirectory)
+                statusMessage = "✓ Export: \(url.lastPathComponent)"
+                return url
+            }
         } catch {
             statusMessage = "✗ Export échoué: \(error.localizedDescription)"
             return nil

@@ -22,8 +22,7 @@ struct ExportSheet: View {
                         panel.allowedContentTypes = [.xml]
                         panel.nameFieldStringValue = "SyncWave Export.xml"
                         if panel.runModal() == .OK, let url = panel.url {
-                            appState.project.exportSettings.outputDirectory = url.deletingLastPathComponent()
-                            _ = await appState.exportXML()
+                            _ = await appState.exportXML(to: url)
                             dismiss()
                         }
                     }
