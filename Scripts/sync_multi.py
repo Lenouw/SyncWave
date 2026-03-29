@@ -105,33 +105,105 @@ def main():
             except Exception as e:
                 sys.stderr.write(f"  [{track['name']}] ERROR: {e}\n")
 
-    # Step 2: Sort clips within each track by filename, then group by session
-    # This ensures consistent ordering regardless of how the user dropped files.
-    sys.stderr.write(f"\nSorting clips by filename within each track...\n")
+    # Step 2: Auto-cluster clips into sessions using audio correlation
+    # Instead of relying on filename order, correlate ALL video clips against each other.
+    # Clips that correlate well (high confidence) = same session.
+    # Clips that don't correlate = different sessions.
+
+    all_clip_list = []
     for track in tracks:
-        track["clips"].sort(key=lambda c: clip_data[c["id"]]["name"] if c["id"] in clip_data else "")
-        for c in track["clips"]:
-            if c["id"] in clip_data:
-                sys.stderr.write(f"  [{track['name']}] {clip_data[c['id']]['name']}\n")
+        for clip in track["clips"]:
+            if clip["id"] in clip_data:
+                all_clip_list.append({
+                    "id": clip["id"],
+                    "track": track["name"],
+                    "duration": clip["duration"]
+                })
 
-    # Session N = Nth clip on each track (after sorting)
-    max_clips_per_track = max((len(t["clips"]) for t in tracks), default=0)
-    sys.stderr.write(f"\n{max_clips_per_track} session(s) detected\n")
+    # Get all video clips for clustering
+    video_clip_list = [c for c in all_clip_list if c["track"].startswith("V")]
+    audio_clip_list = [c for c in all_clip_list if c["track"].startswith("A")]
 
+    sys.stderr.write(f"\nAuto-clustering {len(video_clip_list)} video clips into sessions...\n")
+
+    # Correlate all video pairs
+    MIN_CLUSTER_CONF = 0.3  # minimum confidence to consider clips as same session
+    cluster_edges = []
+    for i, ca in enumerate(video_clip_list):
+        for j, cb in enumerate(video_clip_list):
+            if j <= i:
+                continue
+            if ca["track"] == cb["track"]:
+                continue  # same track = different sessions by definition
+            env_a = clip_data[ca["id"]]["env"]
+            env_b = clip_data[cb["id"]]["env"]
+            offset, conf = correlate_pair(env_a, env_b, env_sr)
+            name_a = clip_data[ca["id"]]["name"][:20]
+            name_b = clip_data[cb["id"]]["name"][:20]
+            sys.stderr.write(f"  {name_a} vs {name_b}: conf={conf:.0%}\n")
+            if conf >= MIN_CLUSTER_CONF:
+                cluster_edges.append((ca["id"], cb["id"], conf))
+
+    # Build clusters using Union-Find
+    parent = {c["id"]: c["id"] for c in video_clip_list}
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for id_a, id_b, conf in cluster_edges:
+        union(id_a, id_b)
+
+    # Group into sessions
+    clusters = {}
+    for c in video_clip_list:
+        root = find(c["id"])
+        if root not in clusters:
+            clusters[root] = []
+        clusters[root].append(c)
+
+    # Assign audio clips to sessions by correlating against each session's videos
+    video_sessions = list(clusters.values())
+    sys.stderr.write(f"\n{len(video_sessions)} session(s) detected from audio clustering\n")
+    for i, vs in enumerate(video_sessions):
+        names = [clip_data[c["id"]]["name"][:20] for c in vs]
+        sys.stderr.write(f"  Session {i+1}: {', '.join(names)}\n")
+
+    # For each audio clip, find which session it belongs to (best correlation with session's videos)
     sessions = []
-    for session_idx in range(max_clips_per_track):
-        session_clips = []
-        for track in tracks:
-            if session_idx < len(track["clips"]):
-                clip = track["clips"][session_idx]
-                if clip["id"] in clip_data:
-                    session_clips.append({
-                        "id": clip["id"],
-                        "track": track["name"],
-                        "duration": clip["duration"]
-                    })
-        sessions.append(session_clips)
-        sys.stderr.write(f"  Session {session_idx+1}: {len(session_clips)} clips\n")
+    for vs in video_sessions:
+        session = list(vs)  # start with video clips
+
+        for ac in audio_clip_list:
+            best_conf = 0
+            for vc in vs:
+                env_v = clip_data[vc["id"]]["env"]
+                env_a = clip_data[ac["id"]]["env"]
+                _, conf = correlate_pair(env_v, env_a, env_sr)
+                best_conf = max(best_conf, conf)
+
+            if best_conf >= MIN_CLUSTER_CONF:
+                session.append(ac)
+                sys.stderr.write(f"  {clip_data[ac['id']]['name'][:25]} → session {len(sessions)+1} ({best_conf:.0%})\n")
+
+        sessions.append(session)
+
+    # Any unassigned audio clips go in a catch-all
+    assigned_audio = set()
+    for s in sessions:
+        for c in s:
+            assigned_audio.add(c["id"])
+    unassigned = [c for c in audio_clip_list if c["id"] not in assigned_audio]
+    if unassigned:
+        sys.stderr.write(f"  {len(unassigned)} unassigned audio clips\n")
+        # Add to first session as fallback
+        if sessions:
+            sessions[0].extend(unassigned)
 
     # Step 3: Sync within each session — CAMERAS FIRST, then audio vs cameras
     # Cameras capture ambient room mix → correlate well with each other.
