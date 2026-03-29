@@ -19,7 +19,7 @@ final class SyncEngine {
     private let driftCorrector = DriftCorrector()
     private let extractor = AudioExtractor()
 
-    /// Sync audio buffers directly (for testing).
+    /// Sync audio buffers directly (for testing with synthetic signals).
     func syncBuffers(
         reference: AudioBuffer,
         targets: [(label: String, buffer: AudioBuffer)]
@@ -27,106 +27,13 @@ final class SyncEngine {
         let startTime = CFAbsoluteTimeGetCurrent()
         var alignments: [SyncAlignment] = []
 
-        // Full preprocessing: DC removal → bandpass → normalize — used for long recordings.
-        let refProcessed = reference
-            .removeDCOffset()
-            .bandpassFiltered(lowFreq: 200, highFreq: 4000)
-            .normalized()
-
         for (label, target) in targets {
-            let tgtProcessed = target
-                .removeDCOffset()
-                .bandpassFiltered(lowFreq: 200, highFreq: 4000)
-                .normalized()
-
-            let useEnvelope = reference.duration > 3.0 && target.duration > 3.0
-
-            let coarseOffsetSeconds: TimeInterval
-            var confidence: Double
-
-            if useEnvelope {
-                // Primary method: energy envelope cross-correlation on preprocessed signals.
-                // Works reliably with real-world camera audio (different mics, gain, noise).
-                let refEnvelope = refProcessed.energyEnvelope(windowSeconds: 0.02, hopSeconds: 0.005)
-                let tgtEnvelope = tgtProcessed.energyEnvelope(windowSeconds: 0.02, hopSeconds: 0.005)
-
-                // Check if envelopes have enough variation to be useful.
-                // Flat envelopes (constant energy, e.g. synthetic signals) can't be correlated.
-                let refVar = envelopeVariance(refEnvelope.samples)
-                let tgtVar = envelopeVariance(tgtEnvelope.samples)
-                // Real audio has coefficient of variation > 0.5 (speech, transients).
-                // Synthetic beat patterns from mixed sines have CV ~ 0.1-0.3.
-                let envelopeUsable = refVar > 0.4 && tgtVar > 0.4
-
-                if envelopeUsable {
-                    let coarseResult = try correlator.findOffset(reference: refEnvelope, target: tgtEnvelope)
-                    // Negate: envelope correlation returns the lag to align envelopes,
-                    // but we need the timeline offset (how much later the target starts).
-                    // The cross-correlation convention for envelopes is inverted vs raw audio.
-                    coarseOffsetSeconds = -coarseResult.offsetSeconds
-                    confidence = coarseResult.confidence
-                } else {
-                    // Flat envelope (constant energy, e.g. synthetic test signals)
-                    // Fall back to GCC-PHAT on raw signals (preprocessing can distort synthetic signals)
-                    let directResult = try correlator.findOffset(reference: reference, target: target)
-                    coarseOffsetSeconds = directResult.offsetSeconds
-                    confidence = directResult.confidence
-                }
-            } else {
-                // Very short signals (< 3s): direct GCC-PHAT on raw signals.
-                let directResult = try correlator.findOffset(reference: reference, target: target)
-                coarseOffsetSeconds = directResult.offsetSeconds
-                confidence = directResult.confidence
-            }
-
-            // Phase 2: Fine alignment using plain cross-correlation on bandpass-filtered audio.
-            // The envelope gives ~5ms accuracy. We refine to sub-millisecond (~0.02ms at 48kHz)
-            // by correlating a narrow window of the preprocessed audio around the coarse offset.
-            var finalOffsetSeconds = coarseOffsetSeconds
-
-            if useEnvelope && refProcessed.sampleCount > 0 && tgtProcessed.sampleCount > 0 {
-                let searchWindowSeconds = 0.2 // ±200ms search range around coarse offset
-                let extractWindowSeconds = 2.0 // 2 seconds of audio for correlation
-
-                // Find a point in the reference that has good content (middle of the clip)
-                let refCenterTime = refProcessed.duration / 2.0
-                // The corresponding point in the target, accounting for the coarse offset.
-                // If target starts +5s later on timeline, an event at ref T=12s is at target T=12-5=7s.
-                let tgtCenterTime = refCenterTime - coarseOffsetSeconds
-
-                // Extract 2-second windows from both signals
-                let refWindow = refProcessed.window(centerSeconds: refCenterTime, windowSeconds: extractWindowSeconds)
-                // Extract a wider window from target to allow for the search range
-                let tgtWindow = tgtProcessed.window(
-                    centerSeconds: tgtCenterTime,
-                    windowSeconds: extractWindowSeconds + searchWindowSeconds * 2
-                )
-
-                if refWindow.sampleCount > 1000 && tgtWindow.sampleCount > 1000 {
-                    // Plain cross-correlation (not GCC-PHAT — more reliable for fine alignment)
-                    let fineResult = plainCrossCorrelation(reference: refWindow, target: tgtWindow)
-                    let fineOffsetSeconds = fineResult.offsetSeconds
-
-                    // Accept the fine result only if it's within the search window (plausible)
-                    if abs(fineOffsetSeconds) < searchWindowSeconds {
-                        finalOffsetSeconds = coarseOffsetSeconds + fineOffsetSeconds
-                        confidence = max(confidence, fineResult.confidence)
-                    }
-                }
-            }
-
-            // Drift correction only for long recordings (> 5 min)
-            var driftPPM: Double = 0
-            if reference.duration > 300 && target.duration > 300 {
-                let driftResult = try driftCorrector.detectDrift(reference: refProcessed, target: tgtProcessed)
-                driftPPM = driftResult.driftPPM
-            }
-
+            let result = try correlator.findOffset(reference: reference, target: target)
             alignments.append(SyncAlignment(
                 label: label,
-                offset: finalOffsetSeconds,
-                driftPPM: driftPPM,
-                confidence: confidence
+                offset: result.offsetSeconds,
+                driftPPM: 0,
+                confidence: result.confidence
             ))
         }
 
@@ -136,293 +43,190 @@ final class SyncEngine {
         )
     }
 
-    /// Plain (non-PHAT) cross-correlation via FFT for fine sub-millisecond alignment.
-    /// More reliable than GCC-PHAT for fine refinement because it preserves amplitude info.
-    private func plainCrossCorrelation(reference: AudioBuffer, target: AudioBuffer) -> CorrelationResult {
-        let refSamples = reference.samples
-        let tgtSamples = target.samples
-        let totalLength = refSamples.count + tgtSamples.count
-        let log2n = vDSP_Length(ceil(log2(Double(totalLength))))
-        let fftSize = Int(1 << log2n)
-        let halfSize = fftSize / 2
+    // MARK: - Progress
 
-        guard let fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else {
-            return CorrelationResult(offsetSamples: 0, offsetSeconds: 0, confidence: 0)
-        }
-        defer { vDSP_destroy_fftsetup(fftSetup) }
-
-        // Forward FFT helper
-        func forwardFFT(_ signal: [Float]) -> ([Float], [Float]) {
-            var padded = [Float](repeating: 0, count: fftSize)
-            padded.replaceSubrange(0..<min(signal.count, fftSize), with: signal.prefix(fftSize))
-            var r = [Float](repeating: 0, count: halfSize)
-            var im = [Float](repeating: 0, count: halfSize)
-            padded.withUnsafeMutableBufferPointer { paddedPtr in
-                paddedPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfSize) { complexPtr in
-                    r.withUnsafeMutableBufferPointer { rPtr in
-                        im.withUnsafeMutableBufferPointer { iPtr in
-                            var split = DSPSplitComplex(realp: rPtr.baseAddress!, imagp: iPtr.baseAddress!)
-                            vDSP_ctoz(complexPtr, 2, &split, 1, vDSP_Length(halfSize))
-                            vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(kFFTDirection_Forward))
-                        }
-                    }
-                }
-            }
-            return (r, im)
-        }
-
-        let (refR, refI) = forwardFFT(refSamples)
-        let (tgtR, tgtI) = forwardFFT(tgtSamples)
-
-        // Cross-power spectrum: tgt * conj(ref) — NO whitening (plain cross-correlation)
-        var crossReal = [Float](repeating: 0, count: halfSize)
-        var crossImag = [Float](repeating: 0, count: halfSize)
-        var tmp = [Float](repeating: 0, count: halfSize)
-
-        vDSP_vmul(tgtR, 1, refR, 1, &crossReal, 1, vDSP_Length(halfSize))
-        vDSP_vmul(tgtI, 1, refI, 1, &tmp, 1, vDSP_Length(halfSize))
-        vDSP_vadd(crossReal, 1, tmp, 1, &crossReal, 1, vDSP_Length(halfSize))
-
-        vDSP_vmul(tgtI, 1, refR, 1, &crossImag, 1, vDSP_Length(halfSize))
-        vDSP_vmul(tgtR, 1, refI, 1, &tmp, 1, vDSP_Length(halfSize))
-        vDSP_vsub(tmp, 1, crossImag, 1, &crossImag, 1, vDSP_Length(halfSize))
-
-        // IFFT
-        var correlation = [Float](repeating: 0, count: fftSize)
-        crossReal.withUnsafeMutableBufferPointer { rPtr in
-            crossImag.withUnsafeMutableBufferPointer { iPtr in
-                var split = DSPSplitComplex(realp: rPtr.baseAddress!, imagp: iPtr.baseAddress!)
-                vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(kFFTDirection_Inverse))
-                correlation.withUnsafeMutableBufferPointer { corrPtr in
-                    corrPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfSize) { complexPtr in
-                        vDSP_ztoc(&split, 1, complexPtr, 2, vDSP_Length(halfSize))
-                    }
-                }
-            }
-        }
-
-        // Scale
-        var scale = 1.0 / Float(fftSize)
-        vDSP_vsmul(correlation, 1, &scale, &correlation, 1, vDSP_Length(fftSize))
-
-        // Find peak
-        var absCorr = [Float](repeating: 0, count: fftSize)
-        vDSP_vabs(correlation, 1, &absCorr, 1, vDSP_Length(fftSize))
-
-        var maxVal: Float = 0
-        var maxIdx: vDSP_Length = 0
-        vDSP_maxvi(absCorr, 1, &maxVal, &maxIdx, vDSP_Length(fftSize))
-
-        var offsetSamples = Int(maxIdx)
-        if offsetSamples > fftSize / 2 {
-            offsetSamples -= fftSize
-        }
-
-        // Normalized confidence
-        var refEnergy: Float = 0
-        var tgtEnergy: Float = 0
-        vDSP_svesq(refSamples, 1, &refEnergy, vDSP_Length(refSamples.count))
-        vDSP_svesq(tgtSamples, 1, &tgtEnergy, vDSP_Length(tgtSamples.count))
-        let denom = sqrt(Double(refEnergy) * Double(tgtEnergy))
-        let confidence = denom > 1e-30 ? Double(maxVal) / denom : 0
-
-        // No negation for fine alignment: we're measuring residual offset within aligned windows.
-        // Positive = target content appears later in the window = needs more positive timeline offset.
-        return CorrelationResult(
-            offsetSamples: Double(offsetSamples),
-            offsetSeconds: Double(offsetSamples) / reference.sampleRate,
-            confidence: min(1.0, confidence)
-        )
-    }
-
-    /// Normalize envelope: subtract mean and divide by std (zero-center + unit variance).
-    private func normalizeEnvelope(_ envelope: AudioBuffer) -> AudioBuffer {
-        let samples = envelope.samples
-        guard samples.count > 1 else { return envelope }
-
-        var mean: Float = 0
-        vDSP_meanv(samples, 1, &mean, vDSP_Length(samples.count))
-
-        var centered = [Float](repeating: 0, count: samples.count)
-        var negMean = -mean
-        vDSP_vsadd(samples, 1, &negMean, &centered, 1, vDSP_Length(samples.count))
-
-        var rms: Float = 0
-        vDSP_rmsqv(centered, 1, &rms, vDSP_Length(samples.count))
-        guard rms > 1e-10 else { return AudioBuffer(samples: centered, sampleRate: envelope.sampleRate, channelCount: 1) }
-
-        var scale = 1.0 / rms
-        var normalized = [Float](repeating: 0, count: samples.count)
-        vDSP_vsmul(centered, 1, &scale, &normalized, 1, vDSP_Length(samples.count))
-
-        return AudioBuffer(samples: normalized, sampleRate: envelope.sampleRate, channelCount: 1)
-    }
-
-    /// Coefficient of variation of an envelope. Low = flat signal, high = dynamic signal.
-    private func envelopeVariance(_ samples: [Float]) -> Double {
-        guard samples.count > 1 else { return 0 }
-        var mean: Float = 0
-        vDSP_meanv(samples, 1, &mean, vDSP_Length(samples.count))
-        guard mean > 1e-10 else { return 0 }
-        var sumSqDiff: Float = 0
-        for s in samples {
-            let diff = s - mean
-            sumSqDiff += diff * diff
-        }
-        let stddev = sqrt(sumSqDiff / Float(samples.count))
-        return Double(stddev / mean) // coefficient of variation
-    }
-
-    /// Progress callback with percentage (0-1) and a status message.
     typealias ProgressCallback = (Double, String) -> Void
 
-    /// Full pipeline: extract audio from files, then sync.
+    // MARK: - Full pipeline
+
+    /// Full pipeline: extract audio → write raw PCM → correlate via Python → return offsets.
     func syncFiles(
         referenceURL: URL,
         targetURLs: [(label: String, url: URL)],
         progress: ProgressCallback? = nil
     ) async throws -> SyncOutput {
-        // Total phases: extract ref (1) + extract each target (N) + sync each target (N * 4 sub-steps)
-        let n = Double(targetURLs.count)
-        let extractWeight = 0.4  // 40% of time = extraction
-        let syncWeight = 0.6     // 60% of time = DSP processing
-
-        // Phase 1: Extract reference audio
-        let refName = referenceURL.lastPathComponent
-        progress?(0.01, "Extraction audio : \(refName)...")
-        let referenceBuffer = try await extractor.extract(from: referenceURL)
-        progress?(extractWeight / (n + 1), "Extraction audio : \(refName) ✓")
-
-        // Phase 2: Extract target audio
-        var targets: [(label: String, buffer: AudioBuffer)] = []
-        for (i, (label, url)) in targetURLs.enumerated() {
-            progress?(extractWeight * Double(i + 1) / (n + 1), "Extraction audio : \(label)...")
-            let buffer = try await extractor.extract(from: url)
-            targets.append((label: label, buffer: buffer))
-            progress?(extractWeight * Double(i + 2) / (n + 1), "Extraction audio : \(label) ✓")
-        }
-
-        // Phase 3: Preprocessing
-        progress?(extractWeight, "Preprocessing : filtrage et normalisation...")
-        let refProcessed = referenceBuffer
-            .removeDCOffset()
-            .bandpassFiltered(lowFreq: 200, highFreq: 4000)
-            .normalized()
-
-        var processedTargets: [(label: String, raw: AudioBuffer, processed: AudioBuffer)] = []
-        for (label, buffer) in targets {
-            let processed = buffer
-                .removeDCOffset()
-                .bandpassFiltered(lowFreq: 200, highFreq: 4000)
-                .normalized()
-            processedTargets.append((label: label, raw: buffer, processed: processed))
-        }
-        progress?(extractWeight + 0.05, "Preprocessing terminé")
-
-        // Phase 4: Sync each target
         let startTime = CFAbsoluteTimeGetCurrent()
+        let n = Double(targetURLs.count)
         var alignments: [SyncAlignment] = []
-        let syncStepWeight = syncWeight / max(1, n)
 
-        for (i, (label, raw, processed)) in processedTargets.enumerated() {
-            let baseProgress = extractWeight + 0.05 + syncStepWeight * Double(i)
+        // Phase 1: Extract reference audio to raw PCM file
+        let refName = referenceURL.lastPathComponent
+        progress?(0.05, "Extraction audio : \(refName)...")
+        let refRawPath = FileManager.default.temporaryDirectory.appendingPathComponent("syncwave_ref_\(UUID().uuidString).raw")
+        try await extractToRawFile(url: referenceURL, output: refRawPath)
+        progress?(0.15, "Extraction audio : \(refName) ✓")
 
-            // Step 1: Envelope correlation
-            progress?(baseProgress + syncStepWeight * 0.1, "Corrélation enveloppe : \(label)...")
+        // Phase 2: For each target, extract and correlate
+        for (i, (label, url)) in targetURLs.enumerated() {
+            let baseProgress = 0.15 + 0.85 * Double(i) / max(1, n)
 
-            let useEnvelope = referenceBuffer.duration > 3.0 && raw.duration > 3.0
-            let coarseOffsetSeconds: TimeInterval
-            var confidence: Double
+            // Extract target audio
+            progress?(baseProgress, "Extraction audio : \(label)...")
+            let tgtRawPath = FileManager.default.temporaryDirectory.appendingPathComponent("syncwave_tgt_\(UUID().uuidString).raw")
+            try await extractToRawFile(url: url, output: tgtRawPath)
+            progress?(baseProgress + 0.85 / n * 0.3, "Corrélation : \(label)...")
 
-            if useEnvelope {
-                let refEnvelope = refProcessed.energyEnvelope(windowSeconds: 0.02, hopSeconds: 0.005)
-                let tgtEnvelope = processed.energyEnvelope(windowSeconds: 0.02, hopSeconds: 0.005)
-
-                let refVar = envelopeVariance(refEnvelope.samples)
-                let tgtVar = envelopeVariance(tgtEnvelope.samples)
-                // Lower threshold for long files (podcasts have long silences that reduce CV)
-                let minCV = referenceBuffer.duration > 120 ? 0.15 : 0.4
-                let envelopeUsable = refVar > minCV && tgtVar > minCV
-
-                if envelopeUsable {
-                    // Normalize envelopes (subtract mean, divide by std) before correlation.
-                    // Raw envelopes are always positive (RMS) with large DC — must zero-center.
-                    let refEnvNorm = normalizeEnvelope(refEnvelope)
-                    let tgtEnvNorm = normalizeEnvelope(tgtEnvelope)
-
-                    // Use PLAIN cross-correlation for envelopes (not GCC-PHAT).
-                    // PHAT whitening destroys envelope signals because they lack
-                    // the spectral structure that PHAT is designed to exploit.
-                    let coarseResult = plainCrossCorrelation(reference: refEnvNorm, target: tgtEnvNorm)
-                    coarseOffsetSeconds = coarseResult.offsetSeconds
-                    confidence = coarseResult.confidence
-                } else {
-                    // Fallback: downsample to 4kHz to keep FFT manageable (max ~30s worth of samples)
-                    let maxSamplesForFFT = 2_000_000 // ~2M samples = safe FFT size
-                    let refDown = referenceBuffer.sampleCount > maxSamplesForFFT
-                        ? referenceBuffer.downsampled(to: 4000)
-                        : referenceBuffer
-                    let tgtDown = raw.sampleCount > maxSamplesForFFT
-                        ? raw.downsampled(to: 4000)
-                        : raw
-                    let directResult = try correlator.findOffset(reference: refDown, target: tgtDown)
-                    coarseOffsetSeconds = directResult.offsetSeconds
-                    confidence = directResult.confidence
-                }
-            } else {
-                let directResult = try correlator.findOffset(reference: referenceBuffer, target: raw)
-                coarseOffsetSeconds = directResult.offsetSeconds
-                confidence = directResult.confidence
-            }
-
-            progress?(baseProgress + syncStepWeight * 0.5, "Affinage sub-ms : \(label)...")
-
-            // Step 2: Fine alignment
-            var finalOffsetSeconds = coarseOffsetSeconds
-
-            if useEnvelope && refProcessed.sampleCount > 0 && processed.sampleCount > 0 {
-                let searchWindowSeconds = 0.2
-                let extractWindowSeconds = 2.0
-                let refCenterTime = refProcessed.duration / 2.0
-                let tgtCenterTime = refCenterTime - coarseOffsetSeconds
-
-                let refWindow = refProcessed.window(centerSeconds: refCenterTime, windowSeconds: extractWindowSeconds)
-                let tgtWindow = processed.window(
-                    centerSeconds: tgtCenterTime,
-                    windowSeconds: extractWindowSeconds + searchWindowSeconds * 2
-                )
-
-                if refWindow.sampleCount > 1000 && tgtWindow.sampleCount > 1000 {
-                    let fineResult = plainCrossCorrelation(reference: refWindow, target: tgtWindow)
-                    if abs(fineResult.offsetSeconds) < searchWindowSeconds {
-                        finalOffsetSeconds = coarseOffsetSeconds + fineResult.offsetSeconds
-                        confidence = max(confidence, fineResult.confidence)
-                    }
-                }
-            }
-
-            progress?(baseProgress + syncStepWeight * 0.8, "Drift : \(label)...")
-
-            // Step 3: Drift correction
-            var driftPPM: Double = 0
-            if referenceBuffer.duration > 300 && raw.duration > 300 {
-                let driftResult = try driftCorrector.detectDrift(reference: refProcessed, target: processed)
-                driftPPM = driftResult.driftPPM
-            }
+            // Run Python correlation
+            let result = try runPythonCorrelation(refPath: refRawPath, tgtPath: tgtRawPath)
+            progress?(baseProgress + 0.85 / n * 0.9, "\(label) : offset \(String(format: "%+.1fs", result.offset))...")
 
             alignments.append(SyncAlignment(
                 label: label,
-                offset: finalOffsetSeconds,
-                driftPPM: driftPPM,
-                confidence: confidence
+                offset: result.offset,
+                driftPPM: 0,
+                confidence: result.confidence
             ))
 
-            progress?(baseProgress + syncStepWeight, "\(label) synchronisé ✓")
+            // Cleanup target raw file
+            try? FileManager.default.removeItem(at: tgtRawPath)
+            progress?(baseProgress + 0.85 / n, "\(label) synchronisé ✓")
         }
 
+        // Cleanup reference raw file
+        try? FileManager.default.removeItem(at: refRawPath)
+
         let processingTime = CFAbsoluteTimeGetCurrent() - startTime
-        progress?(1.0, "Synchronisation terminée")
+        progress?(1.0, String(format: "Synchronisation terminée en %.1fs", processingTime))
 
         return SyncOutput(alignments: alignments, processingTime: processingTime)
+    }
+
+    // MARK: - Private
+
+    /// Extract audio from a media file to raw Float32 PCM via FFmpeg.
+    private func extractToRawFile(url: URL, output: URL) async throws {
+        let ffmpegPath = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+            .first { FileManager.default.fileExists(atPath: $0) }
+
+        guard let ffmpeg = ffmpegPath else {
+            throw NSError(domain: "SyncEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "FFmpeg non trouvé"])
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ffmpeg)
+        process.arguments = ["-i", url.path, "-vn", "-ac", "1", "-ar", "48000", "-f", "f32le", "-y", output.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "SyncEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: "FFmpeg a échoué"])
+        }
+    }
+
+    /// Run the Python correlation script and parse the JSON result.
+    private func runPythonCorrelation(refPath: URL, tgtPath: URL) throws -> (offset: TimeInterval, confidence: Double) {
+        // Find the Python script bundled with the app or in the project
+        let scriptName = "sync_correlate.py"
+        let scriptPath: String
+
+        if let bundlePath = Bundle.main.path(forResource: "sync_correlate", ofType: "py") {
+            scriptPath = bundlePath
+        } else {
+            // Fallback: look in Scripts/ relative to executable
+            let execDir = Bundle.main.executableURL?.deletingLastPathComponent().path ?? ""
+            let candidates = [
+                execDir + "/../Resources/\(scriptName)",
+                execDir + "/../../Scripts/\(scriptName)",
+                // Development path
+                FileManager.default.currentDirectoryPath + "/Scripts/\(scriptName)"
+            ]
+            if let found = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) {
+                scriptPath = found
+            } else {
+                // Last resort: write the script to temp
+                scriptPath = FileManager.default.temporaryDirectory.appendingPathComponent(scriptName).path
+                if !FileManager.default.fileExists(atPath: scriptPath) {
+                    try embeddedPythonScript().write(toFile: scriptPath, atomically: true, encoding: .utf8)
+                }
+            }
+        }
+
+        // Find python3
+        let pythonPath = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+            .first { FileManager.default.fileExists(atPath: $0) }
+        guard let python = pythonPath else {
+            throw NSError(domain: "SyncEngine", code: 3, userInfo: [NSLocalizedDescriptionKey: "Python3 non trouvé"])
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = [scriptPath, refPath.path, tgtPath.path, "48000"]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        try process.run()
+        process.waitUntilExit()
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "SyncEngine", code: 4, userInfo: [NSLocalizedDescriptionKey: "Résultat Python invalide"])
+        }
+
+        if let error = json["error"] as? String {
+            throw NSError(domain: "SyncEngine", code: 5, userInfo: [NSLocalizedDescriptionKey: error])
+        }
+
+        let offset = json["offset_seconds"] as? Double ?? 0
+        let confidence = json["confidence"] as? Double ?? 0
+
+        return (offset: offset, confidence: confidence)
+    }
+
+    /// Embedded Python script as a fallback when the file isn't found.
+    private func embeddedPythonScript() -> String {
+        """
+        #!/usr/bin/env python3
+        import sys, json, numpy as np
+        from scipy.signal import butter, filtfilt
+        def preprocess(a, sr=48000):
+            a = a - np.mean(a)
+            b, c = butter(4, [200/(sr/2), 4000/(sr/2)], btype='band')
+            a = filtfilt(b, c, a)
+            rms = np.sqrt(np.mean(a**2))
+            return a / rms if rms > 1e-10 else a
+        def envelope(a, win=960, hop=240):
+            n = (len(a) - win) // hop + 1
+            env = np.zeros(n)
+            for i in range(n): env[i] = np.sqrt(np.mean(a[i*hop:i*hop+win]**2))
+            return env
+        def normalize(e):
+            e = e - np.mean(e)
+            s = np.std(e)
+            return e / s if s > 1e-10 else e
+        ref = np.fromfile(sys.argv[1], dtype=np.float32)
+        tgt = np.fromfile(sys.argv[2], dtype=np.float32)
+        sr = int(sys.argv[3]) if len(sys.argv) > 3 else 48000
+        hop = int(sr * 0.005); win = int(sr * 0.02)
+        eref = normalize(envelope(preprocess(ref, sr), win, hop))
+        etgt = normalize(envelope(preprocess(tgt, sr), win, hop))
+        env_sr = sr / hop
+        n = len(eref) + len(etgt)
+        nfft = 2**int(np.ceil(np.log2(n)))
+        S1 = np.fft.rfft(eref, n=nfft)
+        S2 = np.fft.rfft(etgt, n=nfft)
+        gcc = np.fft.irfft(S2 * np.conj(S1), n=nfft)
+        abs_gcc = np.abs(gcc)
+        peak_idx = np.argmax(abs_gcc)
+        offset = peak_idx - nfft if peak_idx > nfft // 2 else peak_idx
+        ref_e = np.sum(eref**2); tgt_e = np.sum(etgt**2)
+        denom = np.sqrt(ref_e * tgt_e)
+        conf = float(abs_gcc[peak_idx] / denom) if denom > 0 else 0.0
+        print(json.dumps({"offset_seconds": round(float(offset / env_sr), 6), "confidence": round(min(1.0, conf), 6)}))
+        """
     }
 }

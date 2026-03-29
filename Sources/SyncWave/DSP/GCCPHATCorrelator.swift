@@ -30,6 +30,8 @@ struct GCCPHATCorrelator {
         let refSamples = reference.samples
         let tgtSamples = target.samples
 
+        print("[DEBUG GCCPHATCorrelator] findOffset using GCC-PHAT: refSamples=\(refSamples.count) tgtSamples=\(tgtSamples.count) refRate=\(reference.sampleRate)")
+
         // --- Step 1: GCC-PHAT to find the lag ---
         let (lag, peakConfidence) = gccphatLagWithConfidence(ref: refSamples, tgt: tgtSamples)
 
@@ -39,6 +41,8 @@ struct GCCPHATCorrelator {
         let ncc = abs(normalizedCrossCorr(ref: refSamples, tgt: tgtSamples, lag: lag))
         // Use the higher of the two confidence measures
         let confidence = max(ncc, peakConfidence)
+
+        print("[DEBUG GCCPHATCorrelator] lag=\(lag) offsetSeconds=\(String(format: "%.6f", Double(lag) / reference.sampleRate)) peakConfidence(peak-to-mean)=\(String(format: "%.6f", peakConfidence)) ncc=\(String(format: "%.6f", ncc)) finalConfidence=\(String(format: "%.6f", confidence))")
 
         let offsetSamples = Double(lag)
         return CorrelationResult(
