@@ -148,11 +148,22 @@ final class AppState: ObservableObject {
     func exportXML(to destination: URL? = nil) async -> URL? {
         guard let syncResult = project.syncResult else { return nil }
         do {
-            // Use the reference clip's frame rate for the sequence
-            let refFPS = project.referenceClip?.frameRate ?? 30.0
-            let seqFrameRate = Int(round(refFPS))
+            // Use the first video clip's frame rate, or default 30
+            let videoClip = project.clips.first(where: { $0.isVideo })
+            let seqFrameRate = Int(round(videoClip?.frameRate ?? 30.0))
+
+            // Ensure all clips have sync data (assign 0 offset to clips without sync results)
+            var clipsForExport = project.clips
+            for i in 0..<clipsForExport.count {
+                if clipsForExport[i].offset == nil {
+                    clipsForExport[i].offset = 0
+                    clipsForExport[i].confidence = 0
+                    clipsForExport[i].syncStatus = .failed
+                }
+            }
+
             let xml = try exportEngine.generateFCP7XML(
-                clips: project.clips, syncResult: syncResult, settings: project.exportSettings,
+                clips: clipsForExport, syncResult: syncResult, settings: project.exportSettings,
                 frameRate: seqFrameRate
             )
             if let destination {

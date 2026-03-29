@@ -145,7 +145,9 @@ def main():
     anchor_id = max(conf_sums, key=conf_sums.get)
     sys.stderr.write(f"Anchor: {anchor_id[:8]} (sum conf={conf_sums[anchor_id]:.2f})\n")
 
-    # BFS from anchor to assign positions
+    # Build position graph using ONLY high-confidence direct correlations.
+    # Sort correlations by confidence (highest first) and greedily assign positions.
+    # This avoids error propagation through chains of weak correlations.
     positions = {anchor_id: 0.0}
     confidence_map = {anchor_id: 1.0}
 
@@ -160,22 +162,62 @@ def main():
         if key_ba not in adj or c["confidence"] > adj[key_ba][1]:
             adj[key_ba] = (-c["offset"], c["confidence"])
 
-    # BFS
-    queue = [anchor_id]
-    visited = {anchor_id}
-    while queue:
-        current = queue.pop(0)
-        for other_id in clip_ids:
-            if other_id in visited:
+    # Greedy BFS: process edges in order of confidence (highest first)
+    # Only accept correlations with confidence > 0.5
+    MIN_CONFIDENCE = 0.5
+
+    # First pass: high confidence only
+    changed = True
+    while changed:
+        changed = False
+        best_edge = None
+        best_conf = 0
+
+        for (id_a, id_b), (offset, conf) in adj.items():
+            if conf < MIN_CONFIDENCE:
                 continue
-            key = (current, other_id)
-            if key in adj:
-                offset, conf = adj[key]
-                if conf > 0.1:  # minimum confidence threshold
-                    positions[other_id] = positions[current] + offset
-                    confidence_map[other_id] = conf
-                    visited.add(other_id)
-                    queue.append(other_id)
+            # One end must be positioned, the other not
+            if id_a in positions and id_b not in positions:
+                if conf > best_conf:
+                    best_conf = conf
+                    best_edge = (id_a, id_b, offset, conf)
+            elif id_b in positions and id_a not in positions:
+                if conf > best_conf:
+                    best_conf = conf
+                    best_edge = (id_b, id_a, -offset, conf)
+
+        if best_edge:
+            src, dst, offset, conf = best_edge
+            positions[dst] = positions[src] + offset
+            confidence_map[dst] = conf
+            changed = True
+            sys.stderr.write(f"  Positioned {dst[:8]} via {src[:8]}: {positions[dst]:.1f}s (conf={conf:.0%})\n")
+
+    # Second pass: lower threshold (0.3) for remaining clips
+    changed = True
+    while changed:
+        changed = False
+        best_edge = None
+        best_conf = 0
+
+        for (id_a, id_b), (offset, conf) in adj.items():
+            if conf < 0.3:
+                continue
+            if id_a in positions and id_b not in positions:
+                if conf > best_conf:
+                    best_conf = conf
+                    best_edge = (id_a, id_b, offset, conf)
+            elif id_b in positions and id_a not in positions:
+                if conf > best_conf:
+                    best_conf = conf
+                    best_edge = (id_b, id_a, -offset, conf)
+
+        if best_edge:
+            src, dst, offset, conf = best_edge
+            positions[dst] = positions[src] + offset
+            confidence_map[dst] = conf
+            changed = True
+            sys.stderr.write(f"  Positioned {dst[:8]} via {src[:8]} (low conf): {positions[dst]:.1f}s (conf={conf:.0%})\n")
 
     # Assign unpositioned clips (no good correlation with anything)
     # Place them in order after the last positioned clip, with 120s gap between sessions
