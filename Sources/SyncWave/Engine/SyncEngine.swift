@@ -83,17 +83,30 @@ final class SyncEngine {
             progress?(Double(i + 1) / totalClips * 0.4, "Extraction : \(clip.filename) ✓")
         }
 
-        // Phase 2: Write manifest and run Python multi-clip correlator
-        progress?(0.4, "Corrélation de toutes les pistes...")
+        // Phase 2: Write manifest in track-based format for session grouping
+        progress?(0.4, "Regroupement par session...")
 
-        let manifest: [String: Any] = [
-            "clips": clipPaths.map { [
-                "id": $0.id,
-                "path": $0.path.path,
-                "track": $0.track,
-                "duration": $0.duration
-            ] as [String: Any] }
-        ]
+        // Build track-based manifest (clips grouped by track, in order)
+        var trackManifest: [[String: Any]] = []
+        for track in tracks {
+            let trackClips: [[String: Any]] = track.clips.compactMap { clip in
+                guard let cp = clipPaths.first(where: { $0.id == clip.id.uuidString }) else { return nil }
+                return [
+                    "id": cp.id,
+                    "path": cp.path.path,
+                    "duration": cp.duration
+                ] as [String: Any]
+            }
+            if !trackClips.isEmpty {
+                trackManifest.append([
+                    "name": track.name,
+                    "type": track.type.rawValue,
+                    "clips": trackClips
+                ] as [String: Any])
+            }
+        }
+
+        let manifest: [String: Any] = ["tracks": trackManifest]
 
         let manifestPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("syncwave_manifest.json")
