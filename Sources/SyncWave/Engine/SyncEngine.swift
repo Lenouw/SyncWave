@@ -80,9 +80,12 @@ final class SyncEngine {
             let result = try runPythonCorrelation(refPath: refRawPath, tgtPath: tgtRawPath)
             progress?(baseProgress + 0.85 / n * 0.9, "\(label) : offset \(String(format: "%+.1fs", result.offset))...")
 
+            // Negate: Python returns correlation lag (negative = target content starts later in file).
+            // For timeline placement, we need the opposite: positive = target placed later.
+            let timelineOffset = -result.offset
             alignments.append(SyncAlignment(
                 label: label,
-                offset: result.offset,
+                offset: timelineOffset,
                 driftPPM: 0,
                 confidence: result.confidence
             ))
