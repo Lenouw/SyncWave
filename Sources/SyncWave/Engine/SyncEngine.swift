@@ -317,14 +317,24 @@ final class SyncEngine {
 
                 let refVar = envelopeVariance(refEnvelope.samples)
                 let tgtVar = envelopeVariance(tgtEnvelope.samples)
-                let envelopeUsable = refVar > 0.4 && tgtVar > 0.4
+                // Lower threshold for long files (podcasts have long silences that reduce CV)
+                let minCV = referenceBuffer.duration > 120 ? 0.15 : 0.4
+                let envelopeUsable = refVar > minCV && tgtVar > minCV
 
                 if envelopeUsable {
                     let coarseResult = try correlator.findOffset(reference: refEnvelope, target: tgtEnvelope)
                     coarseOffsetSeconds = -coarseResult.offsetSeconds
                     confidence = coarseResult.confidence
                 } else {
-                    let directResult = try correlator.findOffset(reference: referenceBuffer, target: raw)
+                    // Fallback: downsample to 4kHz to keep FFT manageable (max ~30s worth of samples)
+                    let maxSamplesForFFT = 2_000_000 // ~2M samples = safe FFT size
+                    let refDown = referenceBuffer.sampleCount > maxSamplesForFFT
+                        ? referenceBuffer.downsampled(to: 4000)
+                        : referenceBuffer
+                    let tgtDown = raw.sampleCount > maxSamplesForFFT
+                        ? raw.downsampled(to: 4000)
+                        : raw
+                    let directResult = try correlator.findOffset(reference: refDown, target: tgtDown)
                     coarseOffsetSeconds = directResult.offsetSeconds
                     confidence = directResult.confidence
                 }
