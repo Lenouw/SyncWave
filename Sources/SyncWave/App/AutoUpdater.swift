@@ -9,29 +9,63 @@ final class AutoUpdater: ObservableObject {
     @Published var downloadURL: URL?
     @Published var isDownloading: Bool = false
     @Published var downloadProgress: Double = 0
+    @Published var isChecking: Bool = false
+    @Published var checkCompleted: Bool = false
+    @Published var errorMessage: String?
 
     private let currentVersion: String
     private let repoOwner = "Lenouw"
     private let repoName = "SyncWave"
 
-    init() {
-        self.currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+    var currentVersionString: String { currentVersion }
+
+    var autoCheckUpdates: Bool {
+        get { UserDefaults.standard.object(forKey: "autoCheckUpdates") == nil
+            ? true
+            : UserDefaults.standard.bool(forKey: "autoCheckUpdates") }
+        set { UserDefaults.standard.set(newValue, forKey: "autoCheckUpdates") }
     }
 
-    /// Check for updates on launch (silently).
-    func checkForUpdates() async {
-        guard let url = URL(string: "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest") else { return }
+    init() {
+        self.currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    }
+
+    /// Check for updates silently (no dialog if up to date).
+    func checkForUpdatessilently() async {
+        guard autoCheckUpdates else { return }
+        await _checkForUpdates(silent: true)
+    }
+
+    /// Check for updates — always shows dialog with result.
+    func checkForUpdatesManually() async {
+        await _checkForUpdates(silent: false)
+    }
+
+    private func _checkForUpdates(silent: Bool) async {
+        isChecking = true
+        checkCompleted = false
+        updateAvailable = false
+        errorMessage = nil
+
+        guard let url = URL(string: "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest") else {
+            isChecking = false
+            if !silent { errorMessage = "URL invalide." }
+            return
+        }
 
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tagName = json["tag_name"] as? String else { return }
+                  let tagName = json["tag_name"] as? String else {
+                isChecking = false
+                if !silent { errorMessage = "Réponse invalide du serveur." }
+                return
+            }
 
             let remoteVersion = tagName.replacingOccurrences(of: "v", with: "")
+            latestVersion = remoteVersion
 
             if isNewer(remote: remoteVersion, current: currentVersion) {
-                latestVersion = remoteVersion
-
                 // Find the zip asset
                 if let assets = json["assets"] as? [[String: Any]] {
                     for asset in assets {
@@ -42,12 +76,14 @@ final class AutoUpdater: ObservableObject {
                         }
                     }
                 }
-
                 updateAvailable = true
             }
         } catch {
-            // Silent fail — no network or API error
+            if !silent { errorMessage = "Impossible de vérifier les mises à jour." }
         }
+
+        isChecking = false
+        if !silent { checkCompleted = true }
     }
 
     /// Download and install the update.
@@ -57,14 +93,12 @@ final class AutoUpdater: ObservableObject {
         downloadProgress = 0
 
         do {
-            // Download to temp
             let (tempURL, _) = try await URLSession.shared.data(from: url)
             let zipPath = FileManager.default.temporaryDirectory.appendingPathComponent("SyncWave-update.zip")
             try tempURL.write(to: zipPath)
 
             downloadProgress = 0.5
 
-            // Unzip
             let extractDir = FileManager.default.temporaryDirectory.appendingPathComponent("SyncWave-update")
             try? FileManager.default.removeItem(at: extractDir)
             let process = Process()
@@ -75,7 +109,6 @@ final class AutoUpdater: ObservableObject {
 
             downloadProgress = 0.8
 
-            // Replace /Applications/SyncWave.app
             let newApp = extractDir.appendingPathComponent("SyncWave.app")
             let installPath = URL(fileURLWithPath: "/Applications/SyncWave.app")
 
@@ -85,13 +118,11 @@ final class AutoUpdater: ObservableObject {
 
                 downloadProgress = 1.0
 
-                // Relaunch
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
                 task.arguments = ["-n", installPath.path]
                 try task.run()
 
-                // Quit current instance
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     NSApplication.shared.terminate(nil)
                 }

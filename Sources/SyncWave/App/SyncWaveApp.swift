@@ -25,6 +25,9 @@ struct SyncWaveApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var updater = AutoUpdater()
 
+    @State private var showUpdateWindow: Bool = false
+    @State private var showPreferences: Bool = false
+
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -39,21 +42,39 @@ struct SyncWaveApp: App {
                 .environmentObject(updater)
                 .frame(minWidth: 900, minHeight: 600)
                 .task {
-                    await updater.checkForUpdates()
+                    await updater.checkForUpdatessilently()
                 }
-                .alert("Mise à jour disponible", isPresented: $updater.updateAvailable) {
-                    Button("Installer v\(updater.latestVersion)") {
-                        Task { await updater.downloadAndInstall() }
-                    }
-                    Button("Plus tard", role: .cancel) { }
-                } message: {
-                    Text("SyncWave v\(updater.latestVersion) est disponible. Voulez-vous l'installer ?")
+                // Silent auto-check: show dialog only if update found
+                .onChange(of: updater.updateAvailable) { _, available in
+                    if available { showUpdateWindow = true }
+                }
+                .sheet(isPresented: $showUpdateWindow) {
+                    UpdateView()
+                        .environmentObject(updater)
+                }
+                .sheet(isPresented: $showPreferences) {
+                    PreferencesView()
+                        .environmentObject(updater)
                 }
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1100, height: 700)
         .commands {
             CommandGroup(replacing: .newItem) { }
+
+            CommandMenu("SyncWave") {
+                Button("Vérifier les mises à jour...") {
+                    showUpdateWindow = true
+                    Task { await updater.checkForUpdatesManually() }
+                }
+
+                Divider()
+
+                Button("Préférences...") {
+                    showPreferences = true
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
         }
     }
 }
