@@ -146,13 +146,13 @@ final class AppState: ObservableObject {
     }
 
     func exportXML(to destination: URL? = nil) async -> URL? {
-        guard let syncResult = project.syncResult else { return nil }
+        guard project.syncResult != nil else { return nil }
         do {
             // Use the first video clip's frame rate, or default 30
             let videoClip = project.clips.first(where: { $0.isVideo })
             let seqFrameRate = Int(round(videoClip?.frameRate ?? 30.0))
 
-            // Ensure all clips have sync data (assign 0 offset to clips without sync results)
+            // Ensure all clips have sync data
             var clipsForExport = project.clips
             for i in 0..<clipsForExport.count {
                 if clipsForExport[i].offset == nil {
@@ -162,8 +162,10 @@ final class AppState: ObservableObject {
                 }
             }
 
-            let xml = try exportEngine.generateFCP7XML(
-                clips: clipsForExport, syncResult: syncResult, settings: project.exportSettings,
+            let xml = try exportEngine.generateTrackBasedXML(
+                tracks: project.tracks,
+                syncedClips: clipsForExport,
+                settings: project.exportSettings,
                 frameRate: seqFrameRate
             )
             if let destination {

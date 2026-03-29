@@ -5,26 +5,27 @@ import XCTest
 final class ExportEngineTests: XCTestCase {
 
     func testGeneratesValidFCP7XML() throws {
-        let clips = [
-            MediaClip(url: URL(fileURLWithPath: "/media/CamA.MOV"), filename: "CamA.MOV",
-                       duration: 3600, hasAudioTrack: true, audioSampleRate: 48000, isVideo: true),
-            MediaClip(url: URL(fileURLWithPath: "/media/CamB.MOV"), filename: "CamB.MOV",
-                       duration: 3500, hasAudioTrack: true, audioSampleRate: 48000, isVideo: true),
-            MediaClip(url: URL(fileURLWithPath: "/media/Audio.WAV"), filename: "Audio.WAV",
-                       duration: 3600, hasAudioTrack: true, audioSampleRate: 48000, isVideo: false),
+        var camA = MediaClip(url: URL(fileURLWithPath: "/media/CamA.MOV"), filename: "CamA.MOV",
+                   duration: 3600, hasAudioTrack: true, audioSampleRate: 48000, isVideo: true)
+        camA.offset = 0
+        var camB = MediaClip(url: URL(fileURLWithPath: "/media/CamB.MOV"), filename: "CamB.MOV",
+                   duration: 3500, hasAudioTrack: true, audioSampleRate: 48000, isVideo: true)
+        camB.offset = 2.5
+        var audio = MediaClip(url: URL(fileURLWithPath: "/media/Audio.WAV"), filename: "Audio.WAV",
+                   duration: 3600, hasAudioTrack: true, audioSampleRate: 48000, isVideo: false)
+        audio.offset = 0.8
+
+        let tracks = [
+            Track(name: "V1", type: .video, clips: [camA]),
+            Track(name: "V2", type: .video, clips: [camB]),
+            Track(name: "A1", type: .audio, clips: [audio]),
         ]
 
-        let syncResult = SyncResult(
-            referenceClipID: clips[0].id,
-            alignments: [
-                ClipAlignment(clipID: clips[1].id, offset: 2.5, driftPPM: 12, confidence: 0.9),
-                ClipAlignment(clipID: clips[2].id, offset: 0.8, driftPPM: 3, confidence: 0.95),
-            ],
-            processingTime: 1.5
-        )
-
         let engine = ExportEngine()
-        let xml = try engine.generateFCP7XML(clips: clips, syncResult: syncResult, settings: ExportSettings(), frameRate: 25)
+        let xml = try engine.generateTrackBasedXML(
+            tracks: tracks, syncedClips: [camA, camB, audio],
+            settings: ExportSettings(), frameRate: 25
+        )
 
         XCTAssertTrue(xml.contains("<?xml version=\"1.0\""))
         XCTAssertTrue(xml.contains("<xmeml version=\"4\">"))
@@ -38,27 +39,33 @@ final class ExportEngineTests: XCTestCase {
         XCTAssertNotNil(xmlDoc.rootElement())
     }
 
-    func testExcludesUnsyncedClipsWhenConfigured() throws {
-        var failedClip = MediaClip(url: URL(fileURLWithPath: "/media/Bad.MOV"), filename: "Bad.MOV",
-            duration: 100, hasAudioTrack: true, audioSampleRate: 48000, isVideo: true)
-        failedClip.syncStatus = .failed
+    func testMultipleClipsPerTrack() throws {
+        var cam1a = MediaClip(url: URL(fileURLWithPath: "/media/Cam1_001.MOV"), filename: "Cam1_001.MOV",
+                   duration: 600, hasAudioTrack: true, audioSampleRate: 48000, isVideo: true)
+        cam1a.offset = 0
+        var cam1b = MediaClip(url: URL(fileURLWithPath: "/media/Cam1_002.MOV"), filename: "Cam1_002.MOV",
+                   duration: 600, hasAudioTrack: true, audioSampleRate: 48000, isVideo: true)
+        cam1b.offset = 700  // 100s gap between clips
 
-        let refClip = MediaClip(url: URL(fileURLWithPath: "/media/CamA.MOV"), filename: "CamA.MOV",
-            duration: 3600, hasAudioTrack: true, audioSampleRate: 48000, isVideo: true)
-
-        let syncResult = SyncResult(
-            referenceClipID: refClip.id,
-            alignments: [ClipAlignment(clipID: failedClip.id, offset: 0, driftPPM: 0, confidence: 0.1)],
-            processingTime: 0.5
-        )
-
-        var settings = ExportSettings()
-        settings.includeUnsyncedClips = false
+        let tracks = [
+            Track(name: "V1", type: .video, clips: [cam1a, cam1b]),
+        ]
 
         let engine = ExportEngine()
-        let xml = try engine.generateFCP7XML(clips: [refClip, failedClip], syncResult: syncResult, settings: settings, frameRate: 25)
+        let xml = try engine.generateTrackBasedXML(
+            tracks: tracks, syncedClips: [cam1a, cam1b],
+            settings: ExportSettings(), frameRate: 30
+        )
 
-        XCTAssertTrue(xml.contains("CamA.MOV"))
-        XCTAssertFalse(xml.contains("Bad.MOV"))
+        // Both clips should be in the same video track
+        XCTAssertTrue(xml.contains("Cam1_001.MOV"))
+        XCTAssertTrue(xml.contains("Cam1_002.MOV"))
+
+        let xmlDoc = try XMLDocument(xmlString: xml)
+        XCTAssertNotNil(xmlDoc.rootElement())
+
+        // Count video tracks — should be exactly 1
+        let videoTracks = try xmlDoc.nodes(forXPath: "//video/track")
+        XCTAssertEqual(videoTracks.count, 1, "Should have 1 video track, not \(videoTracks.count)")
     }
 }
