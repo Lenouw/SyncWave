@@ -62,7 +62,10 @@ final class SyncEngine {
 
                 if envelopeUsable {
                     let coarseResult = try correlator.findOffset(reference: refEnvelope, target: tgtEnvelope)
-                    coarseOffsetSeconds = coarseResult.offsetSeconds
+                    // Negate: envelope correlation returns the lag to align envelopes,
+                    // but we need the timeline offset (how much later the target starts).
+                    // The cross-correlation convention for envelopes is inverted vs raw audio.
+                    coarseOffsetSeconds = -coarseResult.offsetSeconds
                     confidence = coarseResult.confidence
                 } else {
                     // Flat envelope (constant energy, e.g. synthetic test signals)
