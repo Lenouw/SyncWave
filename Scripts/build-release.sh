@@ -85,11 +85,30 @@ cat > "$APP_DIR/Contents/Info.plist" << PLIST
     <false/>
     <key>NSSupportsSuddenTermination</key>
     <false/>
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/Lenouw/SyncWave/main/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>1AvZry8Dl0dM3/B2UjkbZeziG7erROR+03HNyrP8T+E=</string>
 </dict>
 </plist>
 PLIST
 
-# 4. Sign
+# 4. Copy Sparkle.framework into the app bundle
+echo "Copying Sparkle.framework..."
+SPARKLE_FW=$(find "$PROJECT_DIR/.build" -path "*/Sparkle.framework" -type d -maxdepth 5 | head -1)
+if [ -n "$SPARKLE_FW" ]; then
+    mkdir -p "$APP_DIR/Contents/Frameworks"
+    cp -R "$SPARKLE_FW" "$APP_DIR/Contents/Frameworks/"
+    echo "Sparkle.framework copied"
+else
+    echo "WARNING: Sparkle.framework not found"
+fi
+
+# 5. Fix rpath so the executable finds Sparkle.framework in Contents/Frameworks
+echo "Fixing rpath..."
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_DIR/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+
+# 6. Sign
 echo "Signing..."
 codesign --force --deep --sign - "$APP_DIR"
 

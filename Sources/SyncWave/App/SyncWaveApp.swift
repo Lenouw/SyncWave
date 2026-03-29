@@ -25,7 +25,6 @@ struct SyncWaveApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var updater = AutoUpdater()
 
-    @State private var showUpdateWindow: Bool = false
     @State private var showPreferences: Bool = false
 
     init() {
@@ -44,17 +43,6 @@ struct SyncWaveApp: App {
                 .environmentObject(appState)
                 .environmentObject(updater)
                 .frame(minWidth: 900, minHeight: 600)
-                .task {
-                    await updater.checkForUpdatessilently()
-                }
-                // Silent auto-check: show dialog only if update found
-                .onChange(of: updater.updateAvailable) { _, available in
-                    if available { showUpdateWindow = true }
-                }
-                .sheet(isPresented: $showUpdateWindow) {
-                    UpdateView()
-                        .environmentObject(updater)
-                }
                 .sheet(isPresented: $showPreferences) {
                     PreferencesView()
                         .environmentObject(updater)
@@ -67,9 +55,9 @@ struct SyncWaveApp: App {
 
             CommandMenu("SyncWave") {
                 Button("Vérifier les mises à jour...") {
-                    showUpdateWindow = true
-                    Task { await updater.checkForUpdatesManually() }
+                    updater.checkForUpdates()
                 }
+                .disabled(!updater.canCheckForUpdates)
 
                 Button("Ouvrir les logs...") {
                     let logURL = FileManager.default.homeDirectoryForCurrentUser
