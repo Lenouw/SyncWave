@@ -74,7 +74,8 @@ struct ExportEngine {
             var audioCh1XML = "        <track>\n"
             var audioCh2XML = "        <track>\n"
 
-            for clip in vTrack.clips {
+            for (clipIndexOnTrack, clip) in vTrack.clips.enumerated() {
+                let clipIdx = clipIndexOnTrack + 1  // 1-based clip index on this track
                 let offset = (offsetMap[clip.id] ?? 0) - minOffset
                 let startFrame = Int(offset * Double(frameRate))
                 let durationFrames = Int(clip.duration * Double(frameRate))
@@ -95,9 +96,9 @@ struct ExportEngine {
                     start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
                     fileContent: fileXML,
                     links: [
-                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, group: nil),
-                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, group: 1),
-                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, group: 2),
+                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, clipIdx: clipIdx, group: nil),
+                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, clipIdx: clipIdx, group: 1),
+                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, clipIdx: clipIdx, group: 2),
                     ]
                 )
 
@@ -107,9 +108,9 @@ struct ExportEngine {
                     start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
                     fileContent: fileRef, sourceTrack: 1,
                     links: [
-                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, group: nil),
-                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, group: 1),
-                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, group: 2),
+                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, clipIdx: clipIdx, group: nil),
+                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, clipIdx: clipIdx, group: 1),
+                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, clipIdx: clipIdx, group: 2),
                     ]
                 )
 
@@ -119,9 +120,9 @@ struct ExportEngine {
                     start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
                     fileContent: fileRef, sourceTrack: 2,
                     links: [
-                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, group: nil),
-                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, group: 1),
-                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, group: 2),
+                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, clipIdx: clipIdx, group: nil),
+                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, clipIdx: clipIdx, group: 1),
+                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, clipIdx: clipIdx, group: 2),
                     ]
                 )
             }
@@ -146,7 +147,8 @@ struct ExportEngine {
             var audioCh1XML = "        <track>\n"
             var audioCh2XML = "        <track>\n"
 
-            for clip in aTrack.clips {
+            for (clipIndexOnTrack, clip) in aTrack.clips.enumerated() {
+                let clipIdx = clipIndexOnTrack + 1
                 let offset = (offsetMap[clip.id] ?? 0) - minOffset
                 let startFrame = Int(offset * Double(frameRate))
                 let durationFrames = Int(clip.duration * Double(frameRate))
@@ -166,8 +168,8 @@ struct ExportEngine {
                     start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
                     fileContent: fileXML, sourceTrack: 1,
                     links: [
-                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, group: 1),
-                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, group: 2),
+                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, clipIdx: clipIdx, group: 1),
+                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, clipIdx: clipIdx, group: 2),
                     ]
                 )
 
@@ -177,8 +179,8 @@ struct ExportEngine {
                     start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
                     fileContent: fileRef, sourceTrack: 2,
                     links: [
-                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, group: 1),
-                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, group: 2),
+                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, clipIdx: clipIdx, group: 1),
+                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, clipIdx: clipIdx, group: 2),
                     ]
                 )
             }
@@ -231,7 +233,7 @@ struct ExportEngine {
         id: String, masterID: String, name: String,
         start: Int, duration: Int, frameRate: Int, ntsc: String,
         fileContent: String, sourceTrack: Int? = nil,
-        links: [(ref: String, type: String, trackIdx: Int, group: Int?)]
+        links: [(ref: String, type: String, trackIdx: Int, clipIdx: Int, group: Int?)]
     ) -> String {
         var xml = "          <clipitem id=\"\(id)\">\n"
         xml += "            <masterclipid>\(masterID)</masterclipid>\n"
@@ -254,7 +256,7 @@ struct ExportEngine {
             xml += "              <linkclipref>\(link.ref)</linkclipref>\n"
             xml += "              <mediatype>\(link.type)</mediatype>\n"
             xml += "              <trackindex>\(link.trackIdx)</trackindex>\n"
-            xml += "              <clipindex>1</clipindex>\n"
+            xml += "              <clipindex>\(link.clipIdx)</clipindex>\n"
             if let g = link.group {
                 xml += "              <groupindex>\(g)</groupindex>\n"
             }
