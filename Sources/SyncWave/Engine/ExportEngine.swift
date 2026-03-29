@@ -38,7 +38,8 @@ struct ExportEngine {
             throw ExportError.noReferenceClip
         }
 
-        let alignmentMap = Dictionary(uniqueKeysWithValues: syncResult.alignments.map { ($0.clipID, $0) })
+        // Use uniquingKeysWith to handle duplicate clip IDs (same file on multiple tracks)
+        let alignmentMap = Dictionary(syncResult.alignments.map { ($0.clipID, $0) }, uniquingKeysWith: { first, _ in first })
         let ntsc = (frameRate == 30 || frameRate == 60 || frameRate == 24) ? "TRUE" : "FALSE"
 
         let entries = buildEntries(

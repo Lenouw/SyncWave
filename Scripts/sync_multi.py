@@ -120,10 +120,17 @@ def main():
             # Negate for timeline convention
             timeline_offset = -offset
 
+            # Sanity check: reject offsets that exceed the longer clip's duration.
+            # If offset > max_duration, the clips can't possibly overlap — the correlation is spurious.
+            max_dur = max(clip_data[id_a]["duration"], clip_data[id_b]["duration"])
+            if abs(timeline_offset) > max_dur:
+                sys.stderr.write(f"  {id_a[:8]} vs {id_b[:8]}: REJECTED offset={timeline_offset:.1f}s > max_dur={max_dur:.0f}s\n")
+                continue
+
             correlations.append({
                 "id_a": id_a,
                 "id_b": id_b,
-                "offset": round(timeline_offset, 6),  # B starts this many seconds after A
+                "offset": round(timeline_offset, 6),
                 "confidence": round(conf, 6)
             })
             sys.stderr.write(f"  {id_a[:8]} vs {id_b[:8]}: offset={timeline_offset:.1f}s, conf={conf:.2%}\n")
