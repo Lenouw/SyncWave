@@ -1,124 +1,104 @@
 # Contexte du projet
 
 ## Projet
-**SyncWave** — App macOS native qui synchronise automatiquement des rushes multi-camera par analyse de waveform audio, et exporte vers Adobe Premiere Pro via FCP 7 XML. Clone de PluralEyes (abandonne par Maxon en 2023).
+**SyncWave** — App macOS native de synchronisation multi-camera multi-clips. Remplace PluralEyes (abandonne en 2023) pour le cas specifique des tournages avec coupures/reprises (plusieurs fichiers par camera + enregistreur externe continu). L'app detecte quels clips se chevauchent dans le temps, les synchronise, et exporte vers Premiere Pro.
 
 ## Stack technique
-- **Langage** : Swift 5.9+ (UI, app shell) + **Python 3/scipy** (moteur de correlation)
-- **UI** : SwiftUI (macOS 14+ Sonoma)
-- **Correlation audio** : Python scipy (butter, filtfilt, FFT cross-correlation) — appele en subprocess
-- **Extraction audio** : FFmpeg CLI (subprocess)
-- **Export** : FCP 7 XML v4 (compatible Premiere Pro, DaVinci Resolve)
-- **Preview video** : AVPlayerView via NSViewRepresentable
-- **Tests** : XCTest (15 tests sur signaux synthetiques)
-- **Build** : Swift Package Manager + Xcode
-- **Distribution** : .app bundle signe ad-hoc, GitHub Releases avec auto-updater
+- **Swift 5.9+ / SwiftUI** : UI, app shell, export XML
+- **Python 3 / scipy** : moteur de correlation audio (subprocess)
+- **FFmpeg CLI** : extraction audio en raw PCM (subprocess)
+- **Export** : FCP 7 XML v4 (Premiere Pro compatible)
+- **Distribution** : .app bundle, GitHub Releases, auto-updater integre
 
 ## Derniere mise a jour
-2026-03-29 14:30
+2026-03-29 15:00
 
 ## Ce qu'on a fait
 
-- [2026-03-29] Moteur de sync passe a Python/scipy :
-  - Le vDSP FFT cross-correlation en Swift echouait sur les fichiers longs (bug de normalisation de confiance : `maxVal / sqrt(E1*E2)` donnait 0.0000008 au lieu de 0.81 car maxVal est deja divise par fftSize)
-  - Nouveau pipeline : FFmpeg extrait raw PCM → Python `sync_correlate.py` fait la correlation → Swift recoit le JSON
-  - Teste et prouve : -159s offset, 81% confiance sur fichiers de 37min
-  - Fix du signe : `timeline_offset = -correlation_lag` (le lag de correlation est inverse de la position timeline)
+- [2026-03-29] Pivot vers multi-clips uniquement :
+  - Mode simple supprime (Premiere le fait deja nativement)
+  - App demarre directement en mode multi-clips avec pistes V1/V2/A1/A2/A3
+  - Moteur multi-clips : `sync_multi.py` correle TOUTES les paires entre pistes
+  - Graphe de positions : BFS greedy avec seuils de confiance (0.5 puis 0.3)
+  - Timeline NLE : clips positionnes visuellement par offset, feedback grise→colore
+  - Ordre des pistes NLE : V en haut (reversed), A en bas (convention Premiere)
+  - Extraction non-bloquante : clips qui echouent sont ignores
 
-- [2026-03-29] Mode multi-clips :
-  - WelcomeView avec 2 modes : "Sync rapide" (tout en vrac) et "Multi-clips" (pistes V1/V2/A1/A2...)
-  - MultiTrackTimelineView avec pistes video en haut, audio en bas
-  - TrackRowView avec drag & drop par piste, labels colores, renumerotation auto
-  - Sync fonctionne en mode multi-clips (collecte les clips depuis les tracks)
+- [2026-03-29] Moteur Python/scipy :
+  - Remplacement de vDSP par Python pour la correlation (vDSP avait un bug de normalisation)
+  - `sync_correlate.py` pour le sync simple (valide : -159s, 81% confiance sur 37min)
+  - `sync_multi.py` pour le sync multi-clips (en cours de debug)
 
-- [2026-03-29] Ameliorations UI :
-  - Progress detaille pendant la sync (message par etape + barre de progression)
-  - Progress visuel par clip (grise → colore au fur et a mesure du traitement)
-  - Systeme de mise a jour integre (dialog + preferences + menu)
-  - Icone app, build release, GitHub Releases v1.0.0 et v1.0.1
+- [2026-03-29] UI et polishing :
+  - Systeme de mise a jour (dialog + preferences + menu)
+  - Progress par clip (grise→colore)
+  - Icone app, GitHub Releases v1.0.0 et v1.0.1
 
-- [2026-03-28] Implementation complete initiale (13 taches)
+- [2026-03-28] Implementation initiale complete
 
 ## Ou on en est
 
 ### Ce qui FONCTIONNE
-- **Sync rapide (mode simple)** : fonctionne sur des fichiers de 37 minutes avec le moteur Python/scipy. Confiance 81%. Offsets corrects. Teste et valide dans Premiere Pro.
-- **Export XML Premiere Pro** : format FCP 7 v4 correct, importe dans Premiere sans erreur
-- **UI** : 2 modes (simple + multi-clips), timeline, preview video, status panel, export sheet
-- **Auto-updater** : verifie GitHub Releases, propose installation
-- **App standalone** : /Applications/SyncWave.app
+- App macOS standalone dans /Applications/SyncWave.app
+- UI multi-clips : pistes V/A, drag & drop, timeline avec positionnement visuel
+- Moteur de sync simple (1 clip par camera) : valide avec 81% confiance sur 37min
+- Export XML Premiere Pro : format correct, importe sans erreur
+- Auto-updater, GitHub Releases
 
 ### Ce qui NE FONCTIONNE PAS
-- **Mode multi-clips** : la sync tourne mais l'export dans Premiere est incomplet :
-  - Seuls les clips avec confiance > 30% sont exportes (les autres sont exclus)
-  - Les clips d'une meme camera avec des enregistrements separes (stop/restart) ne sont pas bien geres — chaque clip est correle individuellement contre la reference, pas par groupe de piste
-  - La timeline multi-piste ne montre pas visuellement les offsets apres sync
-- **Precision du sync** : ~5ms de decalage visible dans les waveforms Premiere (l'affinage sub-ms n'est plus actif depuis le passage a Python)
-- **Clips avec faible correlation** : Cam2-2752 a 0% confiance (+879s offset absurde) — le fichier n'a probablement pas assez de contenu audio commun avec la reference
+- **Moteur multi-clips** : les correlations entre pistes produisent des offsets aberrants pour certains clips (+1314s au lieu de ~160s). Le graphe BFS propage les erreurs.
+- **Crash a l'export** : `Dictionary.init(uniqueKeysWithValues:)` crashe dans `ExportEngine.generateFCP7XML` quand il y a des clips avec le meme ID dans `syncResult.alignments` (cles dupliquees). Le crash est a `ExportEngine.swift:41`.
+- **Fichiers WAV incompatibles** : certains WAV de l'enregistreur (Stereo Mix.wav) ne sont pas lisibles par FFmpeg → extraction echouee.
+- **Precision sync** : ~5ms de decalage (envelope resolution), pas d'affinage sub-ms dans le moteur Python.
 
 ## Architecture et decisions
 
-### Pipeline de sync actuel
+### Pipeline
 ```
-Fichier media → FFmpeg → raw PCM Float32 48kHz mono
-                              ↓
-                    Python sync_correlate.py
-                    (scipy: butter filtfilt + envelope + FFT xcorr)
-                              ↓
-                    JSON {offset_seconds, confidence}
-                              ↓
-                    Swift SyncEngine → ExportEngine → FCP 7 XML
+Fichiers media (V1, V2, A1, A2...)
+       ↓
+FFmpeg → raw PCM Float32 48kHz mono (par clip)
+       ↓
+Python sync_multi.py :
+  - Preprocess (DC removal, bandpass 200-4000Hz, normalise)
+  - Envelope (20ms window, 5ms hop)
+  - Correle toutes les paires entre pistes differentes
+  - BFS greedy pour construire les positions timeline
+       ↓
+JSON → Swift SyncEngine → ExportEngine → FCP 7 XML
 ```
 
-### Pourquoi Python au lieu de Swift/vDSP
-Le vDSP FFT en Swift avait un bug de normalisation de la confiance (division par sqrt(refEnergy*tgtEnergy) alors que maxVal est deja divise par fftSize). L'offset etait en fait trouve correctement par vDSP, mais la confiance etait arrondie a 0% → le resultat etait rejete. Plutot que de continuer a debugger vDSP, on utilise Python/scipy qui est prouve et fiable. Le script est embarque dans le bundle .app.
+### Pourquoi multi-clips uniquement
+Premiere Pro gere deja le sync simple (1 enregistrement continu par camera). Le créneau de SyncWave est le multi-clips : tournages avec coupures/reprises ou chaque camera a plusieurs fichiers. C'est ce que PluralEyes faisait et qu'aucun outil ne fait aujourd'hui.
 
-### Convention de signe des offsets
-- Python `S2 * conj(S1)` retourne un lag negatif quand le target demarre APRES la reference
-- Pour le timeline, il faut l'oppose : `timeline_offset = -python_lag`
-- Documente dans `tasks/lessons.md`
-
-### Structure du projet
-```
-Sources/SyncWave/
-├── App/      SyncWaveApp.swift, AppState.swift, AutoUpdater.swift
-├── Models/   MediaClip, SyncResult, Project (avec ProjectMode, Track), ExportSettings
-├── DSP/      AudioBuffer, AudioExtractor, GCCPHATCorrelator, DriftCorrector
-├── Engine/   SyncEngine (appelle Python), ExportEngine (FCP 7 XML)
-└── Views/    MainWindow, WelcomeView, ImportDropZone, TimelineView, TimelineTrackView,
-              MultiTrackTimelineView, TrackRowView, SyncStatusPanel, PreviewView,
-              ExportSheet, UpdateView, PreferencesView
-Scripts/
-├── sync_correlate.py    ← moteur de correlation Python/scipy
-├── build-release.sh     ← build + bundle .app + zip
-└── create-release.sh    ← publie sur GitHub Releases
-```
+### Le crash export (a fixer en priorite)
+`ExportEngine.swift:41` : `Dictionary(uniqueKeysWithValues: syncResult.alignments.map { ($0.clipID, $0) })` crashe si deux alignments ont le meme clipID. Cela arrive quand le meme fichier est place sur deux pistes (ex: Track1-Mic 1.wav sur A1 et A2).
 
 ## Ce qu'il reste a faire
-- [x] Sync rapide (mode simple) fonctionnel
-- [x] Export XML Premiere Pro
-- [x] UI complete (2 modes)
-- [x] Auto-updater + GitHub Releases
-- [ ] **PRIORITE 1 : Precision sub-milliseconde** — ajouter un affinage dans le script Python (apres l'envelope coarse, faire une cross-correlation sur l'audio filtre dans une fenetre ±200ms). Actuellement ~5ms de decalage visible.
-- [ ] **PRIORITE 2 : Mode multi-clips complet** — gerer les clips multiples par piste (grouper par piste, syncer chaque clip individuellement, garder l'ordre temporel intra-piste)
-- [ ] **PRIORITE 3 : Exclure intelligemment les clips faibles** — au lieu d'exclure les clips < 30% confiance, les garder mais les marquer, laisser l'utilisateur decider
-- [ ] Timeline multi-piste : afficher visuellement les offsets apres sync
-- [ ] Test avec encore plus de fichiers et configurations
+- [ ] **PRIORITE 1 : Fix crash export** — `Dictionary(uniqueKeysWithValues:)` crashe sur cles dupliquees dans ExportEngine.swift:41. Remplacer par `Dictionary(_:uniquingKeysWith:)`.
+- [ ] **PRIORITE 2 : Fiabiliser le moteur multi-clips** — les correlations entre certaines paires donnent des offsets aberrants. Il faut :
+  - Ajouter une validation de coherence : si offset > duree max des clips, rejeter
+  - Utiliser les metadonnees de fichier (date de creation, timecode) pour regrouper les clips en sessions
+  - Tester avec un jeu de donnees plus simple (3 clips du meme moment)
+- [ ] **PRIORITE 3 : Precision sub-ms** — ajouter un affinage cross-correlation fine dans sync_multi.py apres l'envelope coarse
+- [ ] Support des WAV propriétaires (Stereo Mix) : essayer AVFoundation en fallback
+- [ ] Waveform visuelle sur les clips de la timeline
 - [ ] Distribution .dmg
 
 ## Problemes connus
-- **Precision ~5ms** : l'envelope a une resolution de 5ms. L'affinage sub-ms n'est plus actif depuis le passage a Python. Visible dans les waveforms Premiere.
-- **Clips sans correlation** : certains clips (ex: Cam2-2752) obtiennent un offset absurde (+879s) parce qu'ils n'ont pas assez de contenu audio commun avec la reference. Pas de detection automatique de ce cas.
-- **Fenetres multiples** : macOS peut encore restaurer des fenetres fantomes malgre les fixes (NSQuitAlwaysKeepsWindows, AppDelegate)
-- **Python requis** : l'app necessite Python 3 + scipy + numpy installes sur le Mac. Pas de fallback si absent.
+- **Crash export** : `ExportEngine.swift:41` — `Dictionary(uniqueKeysWithValues:)` crashe sur cles dupliquees quand le meme fichier est sur plusieurs pistes
+- **Offsets aberrants** : sync_multi.py peut donner +1314s au lieu de +159s pour certains clips. Le seuil de confiance BFS (0.5) ne suffit pas a filtrer les mauvaises correlations.
+- **Stereo Mix.wav** : FFmpeg ne peut pas lire ces fichiers (format proprietaire de l'enregistreur). L'extraction echoue silencieusement.
+- **Python/scipy requis** : l'app necessite Python 3 + scipy + numpy installes sur le Mac
+- **Fenetres multiples** : peut encore apparaitre dans certains cas
 
 ## Notes pour la prochaine session
-- Le repo est sur GitHub : https://github.com/Lenouw/SyncWave
-- L'app est dans /Applications/SyncWave.app
-- Le moteur de sync est `Scripts/sync_correlate.py` — c'est LA qu'il faut ajouter l'affinage sub-ms
-- Le SyncEngine Swift est `Sources/SyncWave/Engine/SyncEngine.swift` — appelle Python en subprocess
-- L'export XML est `Sources/SyncWave/Engine/ExportEngine.swift`
+- Repo : https://github.com/Lenouw/SyncWave
+- App : /Applications/SyncWave.app
+- **Le crash export** est le bug le plus critique. Ligne 41 de `Sources/SyncWave/Engine/ExportEngine.swift`. Remplacer `Dictionary(uniqueKeysWithValues:)` par `Dictionary(_:uniquingKeysWith: { first, _ in first })`.
+- Le moteur multi-clips est `Scripts/sync_multi.py` — le BFS greedy est la partie fragile
+- Le moteur simple (qui fonctionne) est `Scripts/sync_correlate.py`
 - Les fichiers de test du podcast sont dans le Dropbox : `CosyCosa/Dropbox CosyCosa/2026-Rushs Tournage Podcast/03 - Mars 2026/2026-03-17 Akalai Yanis/`
+- Les fichiers du dossier `5178` sont lisibles par FFmpeg, les autres (5176, 5177) ne le sont pas
 - Pour builder : `swift build -c release && bash Scripts/build-release.sh`
-- Le bug de confiance vDSP est documente dans `tasks/lessons.md`
-- La reference Premiere (vrai export) est dans `Exemples/Premiere.xml`
+- Convention de signe : `timeline_offset = -python_correlation_lag`
