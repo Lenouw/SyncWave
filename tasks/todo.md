@@ -1,33 +1,25 @@
-# Todo
+# Todo — SyncWave
 
-## En cours
-- [ ] **UI sub-tracks audio sous les videos** — voir design ci-dessous
+## Statut actuel
+**v1.5.0 — tout fonctionne, aucune tâche en cours**
 
-## Fait (cette feature)
-- [x] Ajout `audioChannelCount` a MediaClip + detection FFprobe a l'import (AppState)
-- [x] Creation `WaveformGenerator.swift` (DSP/vDSP, peaks par canal)
+## Tout ce qui est DONE
 
-## Reste a faire (cette feature)
-- [ ] Ajouter appel WaveformGenerator dans AppState.importToTrack (generer waveforms a l'import)
-- [ ] Creer `AudioSubTrackView.swift` — sous-piste audio (hauteur 16px, label ch1/ch2, waveform)
-- [ ] Creer `WaveformView.swift` — view SwiftUI pour dessiner les peaks
-- [ ] Modifier `MultiTrackTimelineView` — rendre les sous-pistes sous chaque video track
-- [ ] Ajouter waveforms aussi sur les clips des pistes audio standalone
-- [ ] Ajouter waveforms sur les clips video (dans le clipBlock de TrackRowView)
-- [ ] Build + test visuel
+- [x] Sync multi-caméras (78-90% confiance, 3 cam × 2 sessions validé)
+- [x] Sync micros individuels via caméras comme pont (clustering auto)
+- [x] Export FCP 7 XML v4 — 6 pistes propres dans Premiere (V1/V2/V3 + A1/A2/A3)
+- [x] Résolution vidéo dynamique dans le XML (4K si fichiers 4K)
+- [x] Waveforms sur les clips audio (WaveformGenerator via AVAssetReader + vDSP)
+- [x] Sous-pistes audio (ch1/ch2) sous chaque piste vidéo dans la timeline
+- [x] Piste V3 par défaut
+- [x] Notification de fin de sync (NSSound + UNUserNotification)
+- [x] Auto-updater Sparkle (EdDSA)
+- [x] UI timeline NLE (drag & drop par piste, progress visuel)
 
-## Design valide
-- Approche A : sub-tracks integres (comme NLE)
-- Chaque video montre ses canaux audio en dessous, toujours visibles
-- Nombre de canaux dynamique selon le fichier (mono=1, stereo=2, etc.)
-- Sous-pistes : hauteur 16px, indentees, label "ch1"/"ch2", couleur verte
-- Pistes standalone inchangees
-- Separateur pointille entre videos et audio standalone
-- Waveforms sur TOUS les clips (video + audio sub-tracks + standalone)
+## Backlog
 
-## Backlog (autres features)
-- [ ] Precision sub-ms (affinage cross-correlation fine)
-- [ ] Detection automatique des sessions par metadonnees
-- [ ] Waveform visuelle sur les clips ← EN COURS avec la feature sub-tracks
+- [ ] Pistes audio stéréo dans Premiere (G+D au lieu de mono) — non résolu, plusieurs tentatives infructueuses
+- [ ] Précision sub-ms (affinage cross-correlation fine)
+- [ ] Détection automatique des sessions par métadonnées
 - [ ] Distribution .dmg
-- [ ] Tolerance aux erreurs (clip sur mauvaise piste)
+- [ ] Tolérance aux erreurs (clip sur mauvaise piste)

@@ -81,3 +81,9 @@ Chaque modification précédente du pipeline a cassé quelque chose. Ne modifier
 **Ce qui a mal tourné:** Tous les clips avaient clipindex=1. Le 2ème clip d'une piste perdait son lien vidéo/audio.
 
 **Règle:** clipindex = position du clip sur la piste (1, 2, 3...).
+
+## 2026-03-30 | Bumper la version avant de committer les features
+
+**Ce qui a mal tourné:** Commit des features sans bumper la version. L'utilisateur a dû demander explicitement.
+
+**Règle:** Toute release de features → bumper le fichier VERSION + rebuilder + committer en même temps. Ne jamais laisser la version en retard sur le code.
