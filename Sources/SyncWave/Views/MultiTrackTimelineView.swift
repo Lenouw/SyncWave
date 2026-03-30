@@ -68,6 +68,14 @@ struct MultiTrackTimelineView: View {
                         // Convention NLE : V en haut (reversed), A en bas
                         ForEach(videoTracks.reversed()) { track in
                             TrackRowView(track: track, totalDuration: totalDuration)
+                            // Audio sub-tracks for each channel of the video's audio
+                            ForEach(0..<audioSubTrackCount(for: track), id: \.self) { chIdx in
+                                AudioSubTrackView(
+                                    channelIndex: chIdx,
+                                    clips: track.clips,
+                                    totalDuration: totalDuration
+                                )
+                            }
                         }
                         if !videoTracks.isEmpty && !audioTracks.isEmpty {
                             Divider().padding(.vertical, 2)
@@ -123,5 +131,11 @@ struct MultiTrackTimelineView: View {
 
     private var totalClipCount: Int {
         appState.project.tracks.reduce(0) { $0 + $1.clips.count }
+    }
+
+    /// Max audio channel count across clips in a video track
+    private func audioSubTrackCount(for track: Track) -> Int {
+        guard track.type == .video else { return 0 }
+        return track.clips.map(\.audioChannelCount).max() ?? 0
     }
 }

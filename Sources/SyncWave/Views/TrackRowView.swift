@@ -91,11 +91,20 @@ struct TrackRowView: View {
         let opacity = isSynced ? (0.15 + 0.25 * progress) : 0.15
         let borderOpacity = isSynced ? (0.2 + 0.4 * progress) : 0.2
         let textOpacity = isSynced ? (0.4 + 0.5 * progress) : 0.5
+        let syncedClip = appState.project.clips.first(where: { $0.id == clip.id })
+        let waveformMix = mixdownWaveform(clip: syncedClip ?? clip)
 
         return ZStack(alignment: .leading) {
             // Background
             RoundedRectangle(cornerRadius: 3)
                 .fill(baseColor.opacity(opacity))
+
+            // Waveform — only on audio tracks, not video
+            if track.type == .audio && !waveformMix.isEmpty {
+                WaveformView(samples: waveformMix, color: baseColor)
+                    .padding(.horizontal, 2)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
 
             // Progress fill (left to right)
             if progress > 0 && progress < 1 {
@@ -123,7 +132,7 @@ struct TrackRowView: View {
                     .font(.system(size: 8))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let offset = appState.project.clips.first(where: { $0.id == clip.id })?.offset, offset != 0 {
+                if let offset = syncedClip?.offset, offset != 0 {
                     Text(String(format: "%+.1fs", offset))
                         .font(.system(size: 7))
                         .foregroundStyle(.white.opacity(0.4))
@@ -132,6 +141,21 @@ struct TrackRowView: View {
             .foregroundStyle(.white.opacity(textOpacity))
             .padding(.horizontal, 5)
         }
+    }
+
+    /// Mix all channels into a single waveform (max across channels per sample)
+    private func mixdownWaveform(clip: MediaClip) -> [Float] {
+        let samples = clip.waveformSamples
+        guard let first = samples.first, !first.isEmpty else { return [] }
+        if samples.count == 1 { return first }
+        var mixed = first
+        for ch in 1..<samples.count {
+            let channelData = samples[ch]
+            for i in 0..<min(mixed.count, channelData.count) {
+                mixed[i] = max(mixed[i], channelData[i])
+            }
+        }
+        return mixed
     }
 
     private func handleDrop(providers: [NSItemProvider]) {

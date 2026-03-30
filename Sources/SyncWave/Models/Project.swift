@@ -39,6 +39,7 @@ struct Project {
         [
             Track(name: "V1", type: .video),
             Track(name: "V2", type: .video),
+            Track(name: "V3", type: .video),
             Track(name: "A1", type: .audio),
             Track(name: "A2", type: .audio),
             Track(name: "A3", type: .audio),

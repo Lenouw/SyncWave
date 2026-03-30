@@ -16,6 +16,10 @@ struct MediaClip: Identifiable, Equatable {
     let audioSampleRate: Double
     let isVideo: Bool
     let frameRate: Double // fps du clip (ex: 29.97, 24, 25, 30)
+    let videoWidth: Int   // résolution horizontale (0 si audio only)
+    let videoHeight: Int  // résolution verticale (0 si audio only)
+    let audioChannelCount: Int  // nombre de canaux audio (0=pas d'audio, 1=mono, 2=stereo, etc.)
+    var waveformSamples: [[Float]] = []  // Per-channel waveform data (downsampled amplitude peaks)
     var syncStatus: SyncStatus = .pending
     var offset: TimeInterval?
     var driftPPM: Double?
@@ -32,7 +36,10 @@ struct MediaClip: Identifiable, Equatable {
         hasAudioTrack: Bool,
         audioSampleRate: Double,
         isVideo: Bool,
-        frameRate: Double = 30.0
+        frameRate: Double = 30.0,
+        videoWidth: Int = 0,
+        videoHeight: Int = 0,
+        audioChannelCount: Int = 0
     ) {
         self.id = id
         self.url = url
@@ -42,6 +49,9 @@ struct MediaClip: Identifiable, Equatable {
         self.audioSampleRate = audioSampleRate
         self.isVideo = isVideo
         self.frameRate = frameRate
+        self.videoWidth = videoWidth
+        self.videoHeight = videoHeight
+        self.audioChannelCount = audioChannelCount
     }
 
     mutating func applySyncResult(offset: TimeInterval, driftPPM: Double, confidence: Double) {

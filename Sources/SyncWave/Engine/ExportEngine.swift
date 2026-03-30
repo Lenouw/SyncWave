@@ -18,200 +18,132 @@ struct ExportEngine {
     // MARK: - Public API
 
     /// Generate FCP 7 XML from SyncWave tracks.
-    /// Maps SyncWave tracks to Premiere tracks:
-    ///   SyncWave V1 → Premiere V1 (video) + A1 (audio stereo)
-    ///   SyncWave V2 → Premiere V2 (video) + A2 (audio stereo)
-    ///   SyncWave A1 → Premiere A(N+1) (audio only, stereo)
-    ///   SyncWave A2 → Premiere A(N+2) (audio only, stereo)
-    func generateTrackBasedXML(tracks: [Track], syncedClips: [MediaClip], settings: ExportSettings, frameRate: Int = 30) throws -> String {
-        // NTSC: 25fps and 50fps are non-NTSC. All others (23.976→24, 29.97→30, 59.94→60) are NTSC.
+    /// Rule: 1 Premiere audio track per SyncWave source track.
+    ///   SyncWave V1 → Premiere V1 (video) + A1 (audio)
+    ///   SyncWave VN → Premiere VN (video) + AN (audio)
+    ///   SyncWave A1 → Premiere A(numVideoTracks+1)
+    /// → N video tracks + M audio tracks = N+M total Premiere audio tracks
+    func generateTrackBasedXML(tracks: [Track], syncedClips: [MediaClip], settings: ExportSettings, frameRate: Int = 30, sequenceWidth: Int = 1920, sequenceHeight: Int = 1080) throws -> String {
         let ntsc = (frameRate == 25 || frameRate == 50) ? "FALSE" : "TRUE"
 
-        // Build offset map from synced clips
         var offsetMap: [UUID: TimeInterval] = [:]
-        for clip in syncedClips {
-            offsetMap[clip.id] = clip.offset ?? 0
-        }
+        for clip in syncedClips { offsetMap[clip.id] = clip.offset ?? 0 }
 
-        // Normalize offsets so minimum = 0
         let allOffsets = syncedClips.compactMap { $0.offset }
         let minOffset = allOffsets.min() ?? 0
 
-        // Separate video and audio tracks
         let videoTracks = tracks.filter { $0.type == .video && !$0.clips.isEmpty }
         let audioOnlyTracks = tracks.filter { $0.type == .audio && !$0.clips.isEmpty }
 
-        // Counters
         var clipItemCounter = 1
         var fileCounter = 1
         var masterClipCounter = 1
 
         func nextClipItemID() -> String {
-            let id = "clipitem-\(clipItemCounter)"
-            clipItemCounter += 1
-            return id
+            let id = "clipitem-\(clipItemCounter)"; clipItemCounter += 1; return id
         }
-
-        // MARK: - Build video tracks XML
-        // Each SyncWave video track → one Premiere <track> in <video>
-        // with multiple <clipitem> for each clip on that track
 
         var videoTracksXML = ""
         var audioTracksXML = ""
-        var premiereVideoTrackIndex = 0  // V1, V2...
-        var premiereAudioTrackIndex = 0  // A1, A2... (pairs for stereo)
+        var premiereVideoTrackIndex = 0
+        var premiereAudioTrackIndex = 0
 
-        // Track file definitions (first occurrence gets full definition, rest get reference)
+        // MARK: - Video tracks → 1 audio track each
 
         for vTrack in videoTracks {
             premiereVideoTrackIndex += 1
-            premiereAudioTrackIndex += 1  // A(N) paired with V(N)
-            let audioChBaseIndex = (premiereAudioTrackIndex - 1) * 2 + 1  // 1-based stereo pair
-
-            // Sort clips by offset (chronological order) — Premiere requires this
+            premiereAudioTrackIndex += 1
+            let audioTrackIdx = premiereAudioTrackIndex
             let sortedClips = vTrack.clips.sorted { (offsetMap[$0.id] ?? 0) < (offsetMap[$1.id] ?? 0) }
 
-            // Video track with all clips
             videoTracksXML += "        <track>\n"
-            // Audio tracks (ch1 and ch2) with all clips
-            var audioCh1XML = "        <track>\n"
-            var audioCh2XML = "        <track>\n"
+            var audioTrackXML = "        <track>\n"
 
             for (clipIndexOnTrack, clip) in sortedClips.enumerated() {
-                let clipIdx = clipIndexOnTrack + 1  // 1-based clip index on this track
-                let offset = (offsetMap[clip.id] ?? 0) - minOffset
-                let startFrame = Int(offset * Double(frameRate))
-                let durationFrames = Int(clip.duration * Double(frameRate))
-                let fileID = "file-\(fileCounter)"
-                let masterID = "masterclip-\(masterClipCounter)"
-                let videoItemID = nextClipItemID()
-                let audioCh1ItemID = nextClipItemID()
-                let audioCh2ItemID = nextClipItemID()
-                fileCounter += 1
-                masterClipCounter += 1
-
-                let fileXML = buildFileElement(clip: clip, fileID: fileID, frameRate: frameRate, ntsc: ntsc, full: true)
-                let fileRef = "<file id=\"\(fileID)\"/>"
-
-                // Video clipitem
-                videoTracksXML += clipItemXML(
-                    id: videoItemID, masterID: masterID, name: clip.filename,
-                    start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
-                    fileContent: fileXML,
-                    links: [
-                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, clipIdx: clipIdx, group: nil),
-                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, clipIdx: clipIdx, group: 1),
-                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, clipIdx: clipIdx, group: 2),
-                    ]
-                )
-
-                // Audio ch1 clipitem
-                audioCh1XML += clipItemXML(
-                    id: audioCh1ItemID, masterID: masterID, name: clip.filename,
-                    start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
-                    fileContent: fileRef, sourceTrack: 1,
-                    links: [
-                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, clipIdx: clipIdx, group: nil),
-                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, clipIdx: clipIdx, group: 1),
-                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, clipIdx: clipIdx, group: 2),
-                    ]
-                )
-
-                // Audio ch2 clipitem
-                audioCh2XML += clipItemXML(
-                    id: audioCh2ItemID, masterID: masterID, name: clip.filename,
-                    start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
-                    fileContent: fileRef, sourceTrack: 2,
-                    links: [
-                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, clipIdx: clipIdx, group: nil),
-                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, clipIdx: clipIdx, group: 1),
-                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, clipIdx: clipIdx, group: 2),
-                    ]
-                )
-            }
-
-            videoTracksXML += "          <enabled>TRUE</enabled>\n          <locked>FALSE</locked>\n        </track>\n\n"
-            audioCh1XML += "          <enabled>TRUE</enabled>\n          <locked>FALSE</locked>\n"
-            audioCh1XML += "          <outputchannelindex>\(audioChBaseIndex)</outputchannelindex>\n        </track>\n\n"
-            audioCh2XML += "          <enabled>TRUE</enabled>\n          <locked>FALSE</locked>\n"
-            audioCh2XML += "          <outputchannelindex>\(audioChBaseIndex + 1)</outputchannelindex>\n        </track>\n\n"
-
-            audioTracksXML += audioCh1XML
-            audioTracksXML += audioCh2XML
-        }
-
-        // MARK: - Build audio-only tracks XML
-        // Each SyncWave audio track → Premiere A(N+1) (no video track)
-
-        for aTrack in audioOnlyTracks {
-            premiereAudioTrackIndex += 1
-            let audioChBaseIndex = (premiereAudioTrackIndex - 1) * 2 + 1
-
-            // Sort clips by offset (chronological order)
-            let sortedAudioClips = aTrack.clips.sorted { (offsetMap[$0.id] ?? 0) < (offsetMap[$1.id] ?? 0) }
-
-            var audioCh1XML = "        <track>\n"
-            var audioCh2XML = "        <track>\n"
-
-            for (clipIndexOnTrack, clip) in sortedAudioClips.enumerated() {
                 let clipIdx = clipIndexOnTrack + 1
                 let offset = (offsetMap[clip.id] ?? 0) - minOffset
                 let startFrame = Int(offset * Double(frameRate))
                 let durationFrames = Int(clip.duration * Double(frameRate))
                 let fileID = "file-\(fileCounter)"
                 let masterID = "masterclip-\(masterClipCounter)"
-                let audioCh1ItemID = nextClipItemID()
-                let audioCh2ItemID = nextClipItemID()
-                fileCounter += 1
-                masterClipCounter += 1
+                let videoItemID = nextClipItemID()
+                let audioItemID = nextClipItemID()
+                fileCounter += 1; masterClipCounter += 1
 
                 let fileXML = buildFileElement(clip: clip, fileID: fileID, frameRate: frameRate, ntsc: ntsc, full: true)
                 let fileRef = "<file id=\"\(fileID)\"/>"
 
-                // Audio ch1
-                audioCh1XML += clipItemXML(
-                    id: audioCh1ItemID, masterID: masterID, name: clip.filename,
+                videoTracksXML += clipItemXML(
+                    id: videoItemID, masterID: masterID, name: clip.filename,
                     start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
-                    fileContent: fileXML, sourceTrack: 1,
+                    fileContent: fileXML,
                     links: [
-                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, clipIdx: clipIdx, group: 1),
-                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, clipIdx: clipIdx, group: 2),
+                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, clipIdx: clipIdx, group: nil),
+                        (ref: audioItemID, type: "audio", trackIdx: audioTrackIdx,           clipIdx: clipIdx, group: 1),
                     ]
                 )
-
-                // Audio ch2
-                audioCh2XML += clipItemXML(
-                    id: audioCh2ItemID, masterID: masterID, name: clip.filename,
+                audioTrackXML += clipItemXML(
+                    id: audioItemID, masterID: masterID, name: clip.filename,
                     start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
-                    fileContent: fileRef, sourceTrack: 2,
+                    fileContent: fileRef, sourceTrack: 1,
                     links: [
-                        (ref: audioCh1ItemID, type: "audio", trackIdx: audioChBaseIndex, clipIdx: clipIdx, group: 1),
-                        (ref: audioCh2ItemID, type: "audio", trackIdx: audioChBaseIndex + 1, clipIdx: clipIdx, group: 2),
+                        (ref: videoItemID, type: "video", trackIdx: premiereVideoTrackIndex, clipIdx: clipIdx, group: nil),
+                        (ref: audioItemID, type: "audio", trackIdx: audioTrackIdx,           clipIdx: clipIdx, group: 1),
                     ]
                 )
             }
 
-            audioCh1XML += "          <enabled>TRUE</enabled>\n          <locked>FALSE</locked>\n"
-            audioCh1XML += "          <outputchannelindex>\(audioChBaseIndex)</outputchannelindex>\n        </track>\n\n"
-            audioCh2XML += "          <enabled>TRUE</enabled>\n          <locked>FALSE</locked>\n"
-            audioCh2XML += "          <outputchannelindex>\(audioChBaseIndex + 1)</outputchannelindex>\n        </track>\n\n"
-
-            audioTracksXML += audioCh1XML
-            audioTracksXML += audioCh2XML
+            videoTracksXML += "          <enabled>TRUE</enabled>\n          <locked>FALSE</locked>\n        </track>\n\n"
+            audioTrackXML += "          <enabled>TRUE</enabled>\n          <locked>FALSE</locked>\n"
+            audioTrackXML += "          <outputchannelindex>\(audioTrackIdx)</outputchannelindex>\n        </track>\n\n"
+            audioTracksXML += audioTrackXML
         }
 
-        // Build outputs
+        // MARK: - Standalone audio tracks → 1 track each
+
+        for aTrack in audioOnlyTracks {
+            premiereAudioTrackIndex += 1
+            let audioTrackIdx = premiereAudioTrackIndex
+            let sortedClips = aTrack.clips.sorted { (offsetMap[$0.id] ?? 0) < (offsetMap[$1.id] ?? 0) }
+            var audioTrackXML = "        <track>\n"
+
+            for (clipIndexOnTrack, clip) in sortedClips.enumerated() {
+                let clipIdx = clipIndexOnTrack + 1
+                let offset = (offsetMap[clip.id] ?? 0) - minOffset
+                let startFrame = Int(offset * Double(frameRate))
+                let durationFrames = Int(clip.duration * Double(frameRate))
+                let fileID = "file-\(fileCounter)"
+                let masterID = "masterclip-\(masterClipCounter)"
+                let audioItemID = nextClipItemID()
+                fileCounter += 1; masterClipCounter += 1
+
+                let fileXML = buildFileElement(clip: clip, fileID: fileID, frameRate: frameRate, ntsc: ntsc, full: true)
+                audioTrackXML += clipItemXML(
+                    id: audioItemID, masterID: masterID, name: clip.filename,
+                    start: startFrame, duration: durationFrames, frameRate: frameRate, ntsc: ntsc,
+                    fileContent: fileXML,
+                    links: [(ref: audioItemID, type: "audio", trackIdx: audioTrackIdx, clipIdx: clipIdx, group: 1)]
+                )
+            }
+            audioTrackXML += "          <enabled>TRUE</enabled>\n          <locked>FALSE</locked>\n"
+            audioTrackXML += "          <outputchannelindex>\(audioTrackIdx)</outputchannelindex>\n        </track>\n\n"
+            audioTracksXML += audioTrackXML
+        }
+
+        // Outputs: 1 mono group per audio track
         var outputsXML = ""
-        for i in 1...premiereAudioTrackIndex {
-            let base = (i - 1) * 2 + 1
-            outputsXML += "          <group>\n"
-            outputsXML += "            <index>\(base)</index>\n"
-            outputsXML += "            <numchannels>2</numchannels>\n"
-            outputsXML += "            <downmix>0</downmix>\n"
-            outputsXML += "            <channel><index>\(base)</index></channel>\n"
-            outputsXML += "            <channel><index>\(base + 1)</index></channel>\n"
-            outputsXML += "          </group>\n"
+        if premiereAudioTrackIndex > 0 {
+            for i in 1...premiereAudioTrackIndex {
+                outputsXML += "          <group>\n"
+                outputsXML += "            <index>\(i)</index>\n"
+                outputsXML += "            <numchannels>1</numchannels>\n"
+                outputsXML += "            <downmix>0</downmix>\n"
+                outputsXML += "            <channel><index>\(i)</index></channel>\n"
+                outputsXML += "          </group>\n"
+            }
         }
+
+        let totalOutputChannels = premiereAudioTrackIndex
 
         // Total duration
         let allEnds = syncedClips.map { (($0.offset ?? 0) - minOffset + $0.duration) * Double(frameRate) }
@@ -219,7 +151,9 @@ struct ExportEngine {
 
         return buildSequenceXML(
             frameRate: frameRate, ntsc: ntsc,
+            width: sequenceWidth, height: sequenceHeight,
             totalDurationFrames: totalDurationFrames,
+            totalOutputChannels: totalOutputChannels,
             videoTracksXML: videoTracksXML,
             audioTracksXML: audioTracksXML,
             outputsXML: outputsXML
@@ -287,20 +221,23 @@ struct ExportEngine {
         xml += "<string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>"
         xml += "<media>"
         if clip.isVideo {
+            let w = clip.videoWidth > 0 ? clip.videoWidth : 1920
+            let h = clip.videoHeight > 0 ? clip.videoHeight : 1080
             xml += "<video><samplecharacteristics>"
             xml += "<rate><timebase>\(frameRate)</timebase><ntsc>\(ntsc)</ntsc></rate>"
-            xml += "<width>1920</width><height>1080</height>"
+            xml += "<width>\(w)</width><height>\(h)</height>"
             xml += "<anamorphic>FALSE</anamorphic><pixelaspectratio>square</pixelaspectratio>"
             xml += "<fielddominance>none</fielddominance>"
             xml += "</samplecharacteristics></video>"
         }
+        let channelCount = clip.audioChannelCount > 0 ? clip.audioChannelCount : (clip.isVideo ? 2 : 1)
         xml += "<audio><samplecharacteristics><depth>16</depth><samplerate>48000</samplerate>"
-        xml += "</samplecharacteristics><channelcount>2</channelcount></audio>"
+        xml += "</samplecharacteristics><channelcount>\(channelCount)</channelcount></audio>"
         xml += "</media></file>"
         return xml
     }
 
-    private func buildSequenceXML(frameRate: Int, ntsc: String, totalDurationFrames: Int, videoTracksXML: String, audioTracksXML: String, outputsXML: String) -> String {
+    private func buildSequenceXML(frameRate: Int, ntsc: String, width: Int, height: Int, totalDurationFrames: Int, totalOutputChannels: Int = 2, videoTracksXML: String, audioTracksXML: String, outputsXML: String) -> String {
         var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE xmeml>\n<xmeml version=\"4\">\n"
         xml += "  <sequence id=\"sequence-1\">\n"
         xml += "    <uuid>\(UUID().uuidString)</uuid>\n"
@@ -313,14 +250,14 @@ struct ExportEngine {
         xml += "      <video>\n"
         xml += "        <format><samplecharacteristics>\n"
         xml += "          <rate><timebase>\(frameRate)</timebase><ntsc>\(ntsc)</ntsc></rate>\n"
-        xml += "          <width>1920</width><height>1080</height>\n"
+        xml += "          <width>\(width)</width><height>\(height)</height>\n"
         xml += "          <anamorphic>FALSE</anamorphic><pixelaspectratio>square</pixelaspectratio>\n"
         xml += "          <fielddominance>none</fielddominance><colordepth>24</colordepth>\n"
         xml += "        </samplecharacteristics></format>\n"
         xml += videoTracksXML
         xml += "      </video>\n"
         xml += "      <audio>\n"
-        xml += "        <numOutputChannels>2</numOutputChannels>\n"
+        xml += "        <numOutputChannels>\(totalOutputChannels)</numOutputChannels>\n"
         xml += "        <format><samplecharacteristics><depth>16</depth><samplerate>48000</samplerate></samplecharacteristics></format>\n"
         xml += "        <outputs>\n\(outputsXML)        </outputs>\n"
         xml += audioTracksXML

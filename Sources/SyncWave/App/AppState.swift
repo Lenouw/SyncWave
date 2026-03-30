@@ -1,5 +1,8 @@
 import SwiftUI
 import AVFoundation
+import CoreMedia
+import UserNotifications
+import AppKit
 
 @MainActor
 final class AppState: ObservableObject {
@@ -10,6 +13,7 @@ final class AppState: ObservableObject {
 
     private let syncEngine = SyncEngine()
     private let exportEngine = ExportEngine()
+    private let waveformGenerator = WaveformGenerator()
 
     var hasClips: Bool {
         project.tracks.contains { !$0.clips.isEmpty }
@@ -72,15 +76,29 @@ final class AppState: ObservableObject {
             let duration = await getMediaDuration(url: url)
             let hasAudio = await hasAudioTrack(url: url)
             let fps = isVideo ? await getFrameRate(url: url) : 30.0
+            let (videoWidth, videoHeight) = isVideo ? await getVideoResolution(url: url) : (0, 0)
 
             Logger.shared.info(String(format: "Import: \(url.lastPathComponent) → track \(trackName) (duration=%.2fs, video=\(isVideo), hasAudio=\(hasAudio))", duration))
 
-            let clip = MediaClip(
+            let channelCount = hasAudio ? await getAudioChannelCount(url: url) : 0
+
+            var clip = MediaClip(
                 url: url, filename: url.lastPathComponent,
                 duration: duration, hasAudioTrack: hasAudio,
                 audioSampleRate: 48000, isVideo: isVideo,
-                frameRate: fps
+                frameRate: fps,
+                videoWidth: videoWidth,
+                videoHeight: videoHeight,
+                audioChannelCount: channelCount
             )
+
+            // Generate waveform data in background
+            if hasAudio {
+                if let samples = try? await waveformGenerator.generateWaveform(url: url) {
+                    clip.waveformSamples = samples
+                }
+            }
+
             project.tracks[trackIndex].clips.append(clip)
         }
     }
@@ -144,6 +162,7 @@ final class AppState: ObservableObject {
             )
             Logger.shared.info(String(format: "Sync end: success (%.1fs, %d alignments)", result.processingTime, result.alignments.count))
             statusMessage = String(format: "✓ Synchronisation terminée en %.1fs", result.processingTime)
+            notifySyncComplete(duration: result.processingTime, clipCount: allClips.count)
         } catch {
             Logger.shared.error("Sync error: \(error.localizedDescription)")
             statusMessage = "✗ Erreur: \(error.localizedDescription)"
@@ -155,9 +174,11 @@ final class AppState: ObservableObject {
         guard project.syncResult != nil else { return nil }
         Logger.shared.info("Export start")
         do {
-            // Use the first video clip's frame rate, or default 30
+            // Use the first video clip's frame rate and resolution, or defaults
             let videoClip = project.clips.first(where: { $0.isVideo })
             let seqFrameRate = Int(round(videoClip?.frameRate ?? 30.0))
+            let seqWidth = videoClip?.videoWidth ?? 1920
+            let seqHeight = videoClip?.videoHeight ?? 1080
 
             // Ensure all clips have sync data
             var clipsForExport = project.clips
@@ -173,7 +194,9 @@ final class AppState: ObservableObject {
                 tracks: project.tracks,
                 syncedClips: clipsForExport,
                 settings: project.exportSettings,
-                frameRate: seqFrameRate
+                frameRate: seqFrameRate,
+                sequenceWidth: seqWidth,
+                sequenceHeight: seqHeight
             )
             if let destination {
                 try xml.write(to: destination, atomically: true, encoding: .utf8)
@@ -213,6 +236,23 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func notifySyncComplete(duration: TimeInterval, clipCount: Int) {
+        // Sound — always plays immediately
+        NSSound(named: "Glass")?.play()
+
+        // System notification — useful when app is in background
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Synchronisation terminée"
+            content.body = String(format: "%d clips synchronisés en %.0fs", clipCount, duration)
+            content.sound = nil  // Son déjà joué via NSSound
+            let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+            center.add(request, withCompletionHandler: nil)
+        }
+    }
+
     private func getMediaDuration(url: URL) async -> TimeInterval {
         let asset = AVAsset(url: url)
         return (try? await asset.load(.duration))?.seconds ?? 0
@@ -223,10 +263,33 @@ final class AppState: ObservableObject {
         return !((try? await asset.loadTracks(withMediaType: .audio)) ?? []).isEmpty
     }
 
+    private func getAudioChannelCount(url: URL) async -> Int {
+        let asset = AVAsset(url: url)
+        guard let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first else { return 0 }
+        guard let formatDescriptions = try? await audioTrack.load(.formatDescriptions) else { return 0 }
+        guard let desc = formatDescriptions.first else { return 0 }
+        let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc)
+        return Int(asbd?.pointee.mChannelsPerFrame ?? 0)
+    }
+
     private func getFrameRate(url: URL) async -> Double {
         let asset = AVAsset(url: url)
         guard let videoTrack = try? await asset.loadTracks(withMediaType: .video).first else { return 30.0 }
         let fps = (try? await videoTrack.load(.nominalFrameRate)) ?? 30.0
         return Double(fps)
+    }
+
+    private func getVideoResolution(url: URL) async -> (Int, Int) {
+        let asset = AVAsset(url: url)
+        guard let videoTrack = try? await asset.loadTracks(withMediaType: .video).first else { return (0, 0) }
+        guard let size = try? await videoTrack.load(.naturalSize) else { return (0, 0) }
+        // Apply preferred transform to get correct orientation
+        let transform = (try? await videoTrack.load(.preferredTransform)) ?? .identity
+        let transformed = size.applying(transform)
+        let w = Int(abs(transformed.width))
+        let h = Int(abs(transformed.height))
+        // Fallback to natural size if transform gives 0
+        if w > 0 && h > 0 { return (w, h) }
+        return (Int(size.width), Int(size.height))
     }
 }
