@@ -4,15 +4,15 @@
         <title>SyncWave</title>
         <language>fr</language>
         <item>
-            <title>Version 1.4.0</title>
-            <pubDate>Sun, 29 Mar 2026 22:24:38 +0200</pubDate>
-            <sparkle:version>1.4.0</sparkle:version>
-            <sparkle:shortVersionString>1.4.0</sparkle:shortVersionString>
+            <title>Version 1.5.1</title>
+            <pubDate>Wed, 01 Apr 2026 11:27:24 +0200</pubDate>
+            <sparkle:version>1.5.1</sparkle:version>
+            <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/Lenouw/SyncWave/releases/download/v1.4.0/SyncWave-1.4.0.zip"
+            <enclosure url="https://github.com/Lenouw/SyncWave/releases/download/v1.5.1/SyncWave-1.5.1.zip"
                        type="application/octet-stream"
-                       sparkle:edSignature="LX9qf9JWjVxe0A5CFvKlly6U/Qi+oSTJxBcHZHLYqpvlHkFoV8nwWAULD82CtOksUH6bKi2B4fOFB5NramCUDg=="
-                       length="1668968" />
+                       sparkle:edSignature="peFAwEdBzf7RQumo9BSbPWm4KwF5rqE/yn/jvpAfUeH/HrJh1/ffFfL0d8xLaw2s5FY0kGFhJVKejCFAJlcoDg=="
+                       length="1698399" />
         </item>
     </channel>
 </rss>
