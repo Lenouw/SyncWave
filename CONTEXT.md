@@ -17,7 +17,37 @@ Repo GitHub : https://github.com/Lenouw/SyncWave
 **v1.5.0** — stable, installée dans `/Applications/SyncWave.app`
 
 ## Dernière mise à jour
-2026-03-30
+2026-04-01
+
+## 🎯 PROCHAINE SESSION (jeudi) — Prompt de démarrage
+
+**SyncWave v1.6.0 — Bundler FFmpeg + Python/numpy/scipy**
+
+On attaque la priorité absolue issue des retours bêta : rendre SyncWave 100% autonome, sans aucune dépendance à installer par l'utilisateur.
+
+**Contexte du problème (retours bêta Jeremy) :**
+- FFmpeg Homebrew invisible pour les apps GUI macOS → "FFmpeg non trouvé"
+- numpy/scipy installés pour Python 3.9 Apple, SyncWave utilise Python 3.14 Homebrew → incompatible
+- pip3 bloqué par PEP 668 "externally-managed-environment" sur macOS récent
+- Résultat : l'app ne fonctionne pas pour un utilisateur lambda
+
+**Ce qu'on veut faire :**
+
+1. **Bundler FFmpeg** — télécharger le binaire statique FFmpeg pour macOS ARM et le placer dans `Resources/`. Modifier `SyncEngine.swift` pour chercher d'abord `Bundle.main.path(forResource: "ffmpeg", ofType: nil)` avant les chemins Homebrew.
+
+2. **Bundler sync_multi.py en binaire** — utiliser PyInstaller pour compiler `Scripts/sync_multi.py` en exécutable standalone avec numpy/scipy inclus. Le placer dans `Resources/`. Modifier `SyncEngine.swift` pour utiliser ce binaire en priorité (plus besoin de chercher python3).
+
+**Fichiers à modifier :**
+- `SyncEngine.swift` — chemins FFmpeg et Python (logique intacte, uniquement les chemins)
+- `Scripts/build-release.sh` — inclure ffmpeg + binaire sync_multi dans le bundle
+- `Scripts/build-sync-binary.sh` — nouveau script PyInstaller à créer
+
+**Fichiers verrouillés à NE PAS modifier :**
+- `Scripts/sync_multi.py`
+- `Scripts/sync_correlate.py`
+- La logique de `SyncEngine.swift` (uniquement les chemins)
+
+**Résultat attendu :** double-clic sur SyncWave.app → ça marche, sans rien installer. Release v1.6.0 sur GitHub.
 
 ## Ce qu'on a fait
 
