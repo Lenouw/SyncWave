@@ -208,14 +208,28 @@ final class SyncEngine {
         if let stdoutStr = String(data: data, encoding: .utf8), !stdoutStr.isEmpty {
             Logger.shared.info("Python stdout: \(stdoutStr.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
-        if let stderrStr = String(data: stderrData, encoding: .utf8), !stderrStr.isEmpty {
+        let stderrStr = String(data: stderrData, encoding: .utf8) ?? ""
+        if !stderrStr.isEmpty {
             Logger.shared.warn("Python stderr: \(stderrStr.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let positions = json["positions"] as? [[String: Any]] else {
             Logger.shared.error("Invalid Python result (exit code: \(process.terminationStatus))")
-            throw NSError(domain: "SyncEngine", code: 4, userInfo: [NSLocalizedDescriptionKey: "Résultat Python invalide"])
+
+            // Diagnose common issues from stderr and surface a clear message
+            let message: String
+            if stderrStr.contains("No module named 'numpy'") || stderrStr.contains("No module named 'scipy'") {
+                message = "numpy/scipy manquants. Dans le Terminal :\nbrew install python3 && pip3 install numpy scipy"
+            } else if stderrStr.contains("xcode-select") || stderrStr.contains("No developer tools") {
+                message = "Python système Apple détecté (sans packages). Installez Python via Homebrew :\nbrew install python3 && pip3 install numpy scipy"
+            } else if stderrStr.contains("ModuleNotFoundError") {
+                let mod = stderrStr.components(separatedBy: "No module named '").dropFirst().first?.components(separatedBy: "'").first ?? "inconnu"
+                message = "Module Python manquant : \(mod)\npip3 install \(mod)"
+            } else {
+                message = "Résultat Python invalide"
+            }
+            throw NSError(domain: "SyncEngine", code: 4, userInfo: [NSLocalizedDescriptionKey: message])
         }
 
         return positions.map { pos in
