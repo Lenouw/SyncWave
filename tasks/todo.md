@@ -16,6 +16,14 @@
 - [x] Auto-updater Sparkle (EdDSA)
 - [x] UI timeline NLE (drag & drop par piste, progress visuel)
 
+## PRIORITÉ — v1.6.0 (retours bêta test)
+
+- [ ] **Bundler sync_multi.py en binaire standalone via PyInstaller** — zéro dépendance Python/numpy/scipy pour l'utilisateur. L'app doit fonctionner out-of-the-box sans rien installer.
+  - Contexte : pip3 install échoue sur macOS récent (PEP 668 "externally-managed-environment"), numpy installé pour Python 3.9 mais SyncWave utilise Python 3.14 Homebrew → incompatibilité totale
+  - Solution : `pyinstaller --onefile sync_multi.py` → binaire `dist/sync_multi` bundlé dans `Resources/`
+  - SyncEngine.swift : utiliser le binaire bundlé en priorité, fallback python3 si absent
+- [ ] **Bundler FFmpeg dans l'app** — télécharger le binaire statique FFmpeg (~80MB) et le mettre dans `Resources/`. Même problème : FFmpeg Homebrew invisible pour les apps GUI macOS.
+
 ## Backlog
 
 - [ ] Pistes audio stéréo dans Premiere (G+D au lieu de mono) — non résolu, plusieurs tentatives infructueuses

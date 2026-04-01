@@ -87,3 +87,13 @@ Chaque modification précédente du pipeline a cassé quelque chose. Ne modifier
 **Ce qui a mal tourné:** Commit des features sans bumper la version. L'utilisateur a dû demander explicitement.
 
 **Règle:** Toute release de features → bumper le fichier VERSION + rebuilder + committer en même temps. Ne jamais laisser la version en retard sur le code.
+
+## 2026-04-01 | Dépendances externes = bloquant pour les utilisateurs (retours bêta)
+
+**Ce qui a mal tourné (retours bêta Jeremy) :**
+1. FFmpeg Homebrew installé mais invisible pour les apps GUI macOS → "FFmpeg non trouvé"
+2. numpy/scipy installés pour Python 3.9 Apple mais SyncWave utilise Python 3.14 Homebrew → incompatibilité
+3. `pip3 install` échoue sur macOS récent avec PEP 668 "externally-managed-environment"
+4. Même avec `--break-system-packages`, l'install se fait dans le mauvais Python
+
+**Règle:** Ne jamais distribuer une app qui dépend de FFmpeg ou Python installés par l'utilisateur. Bundler les deux dans Resources/ dès la v1.6.0. Toute app destinée à des non-développeurs doit être 100% autonome.
